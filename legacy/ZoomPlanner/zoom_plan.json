@@ -1,0 +1,264 @@
+{
+  "schema_version": "1.0",
+  "project": "trimmed",
+  "clips": [
+    {
+      "clip_id": "01",
+      "filename": "0001_1_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 5.6,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "הוק על הקושי להתמיד והיתרון של תחרות"
+        },
+        {
+          "type": "zoom",
+          "start": 5.6,
+          "end": 12.133,
+          "preset": "PUNCH_STRONG",
+          "focus": "FACE_CENTER",
+          "reason": "חשיפת האפליקציה והקשר האישי למפתח"
+        }
+      ]
+    },
+    {
+      "clip_id": "02",
+      "filename": "0002_2_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 3.84,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 3.84,
+          "end": 7.233,
+          "preset": "PUNCH_LIGHT",
+          "focus": "FACE_CENTER",
+          "reason": "הרחבת התועלת גם לחברים"
+        }
+      ]
+    },
+    {
+      "clip_id": "03",
+      "filename": "0003_3_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 4.24,
+          "preset": "PUNCH_LIGHT",
+          "focus": "FACE_CENTER",
+          "reason": "קריאה ברורה ללחוץ על הקישור"
+        },
+        {
+          "type": "zoom",
+          "start": 4.24,
+          "end": 7.68,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 7.68,
+          "end": 12.633,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "הסבר על המסגרת והטריקים הפסיכולוגיים"
+        }
+      ]
+    },
+    {
+      "clip_id": "04",
+      "filename": "0004_4_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 3.52,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 3.52,
+          "end": 7.04,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "הפתעה שאין אפליקציה אחרת שעושה זאת"
+        },
+        {
+          "type": "zoom",
+          "start": 7.04,
+          "end": 8.9,
+          "preset": "PUNCH_LIGHT",
+          "focus": "FACE_CENTER",
+          "reason": "פאנץ׳ אישי על ההחלטה לפתח אחת"
+        }
+      ]
+    },
+    {
+      "clip_id": "05",
+      "filename": "0005_5_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 5.0,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 5.0,
+          "end": 10.167,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "ניסוח המטרה המרכזית של המוצר: לייצר מוטיבציה"
+        }
+      ]
+    },
+    {
+      "clip_id": "06",
+      "filename": "0006_6_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 2.5,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 2.5,
+          "end": 8.366,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "הניגוד בין תיאוריה למחקרים שסותרים זה את זה"
+        }
+      ]
+    },
+    {
+      "clip_id": "07",
+      "filename": "0007_7_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 3.0,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "מעבר ישיר מהפיתוח אל הצופים"
+        },
+        {
+          "type": "zoom",
+          "start": 3.0,
+          "end": 6.0,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 6.0,
+          "end": 12.333,
+          "preset": "PUNCH_LIGHT",
+          "focus": "FACE_CENTER",
+          "reason": "הגדרת קהל הניסוי והבקשה לפידבק איכותי"
+        }
+      ]
+    },
+    {
+      "clip_id": "08",
+      "filename": "0008_8_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 4.44,
+          "preset": "PUNCH_STRONG",
+          "focus": "FACE_CENTER",
+          "reason": "הטבה חזקה למשתמשים הראשונים"
+        },
+        {
+          "type": "zoom",
+          "start": 4.44,
+          "end": 10.56,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 10.56,
+          "end": 15.32,
+          "preset": "PUNCH_LIGHT",
+          "focus": "FACE_CENTER",
+          "reason": "בניית תחושת בלעדיות וגאווה למשתמשים הראשונים"
+        },
+        {
+          "type": "zoom",
+          "start": 15.32,
+          "end": 20.5,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "הצהרת מחויבות וביטחון שהפרויקט יצליח"
+        }
+      ]
+    },
+    {
+      "clip_id": "09",
+      "filename": "0009_9_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 4.5,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 4.5,
+          "end": 8.567,
+          "preset": "PUNCH_MEDIUM",
+          "focus": "FACE_CENTER",
+          "reason": "קריאה לפעולה להצטרף למאה המשתמשים הראשונים"
+        }
+      ]
+    },
+    {
+      "clip_id": "10",
+      "filename": "0010_10_trimmed.mp4",
+      "effects": [
+        {
+          "type": "zoom",
+          "start": 0.0,
+          "end": 5.9,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        },
+        {
+          "type": "zoom",
+          "start": 5.9,
+          "end": 10.06,
+          "preset": "PUNCH_LIGHT",
+          "focus": "FACE_CENTER",
+          "reason": "הדגשת שיפור משמעותי בנוחות ההזמנה"
+        },
+        {
+          "type": "zoom",
+          "start": 10.06,
+          "end": 12.633,
+          "preset": "NORMAL",
+          "focus": "FACE_CENTER"
+        }
+      ]
+    }
+  ]
+}

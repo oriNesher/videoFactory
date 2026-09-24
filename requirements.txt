@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+
+# AI provider. Only used when VIDEO_FACTORY_LLM_PROVIDER=anthropic; mock mode
+# needs no key and no network, and the import is lazy so a missing package
+# never breaks startup.
+anthropic
+
+# Tests
+pytest
+httpx

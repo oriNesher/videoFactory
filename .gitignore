@@ -1,0 +1,20 @@
+# Python environments and cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# JavaScript dependencies and build output
+node_modules/
+dist/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Generated files
+*.log
+
+# Application workspace (project metadata, intermediates, exports)
+workspace/
