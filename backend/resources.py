@@ -15,9 +15,14 @@ one are outdated.
 import hashlib
 import json
 
-from . import storage
+from . import cutting, storage
 
-RESOURCE_CATALOG_VERSION = 1
+RESOURCE_CATALOG_VERSION = 2
+
+# Settings blocks that belong to a module's own form rather than to what a plan
+# would do. A plan carries its own parameters, so nudging the cutting threshold
+# in the interface must not mark every existing plan outdated.
+FINGERPRINT_EXCLUDED_SETTINGS = frozenset({cutting.SETTINGS_KEY})
 
 MEDIA_TYPE_VIDEO = "video"
 
@@ -60,6 +65,11 @@ def build_catalog(project: dict) -> dict:
         "catalog_version": RESOURCE_CATALOG_VERSION,
         "note": CONTENT_NOTE,
         "resources": resources,
+        # Files this application produced, listed separately from the footage
+        # the user supplied. Keeping them apart is the point: a source is
+        # something to edit, a generated file is a result, and a cutting run
+        # must never quietly take the previous run's output as its input.
+        "generated": cutting.generated_resources(project["id"]),
     }
 
 
@@ -67,20 +77,24 @@ def input_snapshot(project: dict) -> dict:
     """The subset of project state a plan depends on.
 
     The project *name* is deliberately absent: renaming a project does not
-    change what a plan would do, so it must not invalidate one.
+    change what a plan would do, so it must not invalidate one. Generated
+    outputs are absent for the same reason, and because reading them means
+    scanning every run directory — work a fingerprint should never do.
     """
-    catalog = build_catalog(project)
-
     return {
         "resources": [
             {
-                "id": resource["id"],
-                "filename": resource["filename"],
-                "available": resource["available"],
+                "id": source["id"],
+                "filename": source["filename"],
+                "available": source["exists"],
             }
-            for resource in catalog["resources"]
+            for source in storage.describe_sources(project["sources"])
         ],
-        "settings": project.get("settings", {}),
+        "settings": {
+            key: value
+            for key, value in project.get("settings", {}).items()
+            if key not in FINGERPRINT_EXCLUDED_SETTINGS
+        },
     }
 
 

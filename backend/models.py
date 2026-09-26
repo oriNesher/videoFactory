@@ -35,3 +35,15 @@ class GeneratePlanRequest(BaseModel):
 class SavePlanRevisionRequest(BaseModel):
     summary: Any = None
     actions: Any = None
+
+
+class SaveCuttingSettingsRequest(BaseModel):
+    settings: Any = None
+    output_mode: Any = None
+    source_ids: Any = None
+
+
+class StartCuttingRunRequest(BaseModel):
+    source_ids: Any = None
+    settings: Any = None
+    output_mode: Any = None

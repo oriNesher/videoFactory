@@ -3,8 +3,9 @@
 The catalog is owned by the backend, never by the model. It is the *only* list
 of operations a plan may reference, and every registered capability here is
 implemented and executable today. An installed executable is not a capability:
-FFmpeg and Auto-Editor are on this machine, but nothing in Video Factory drives
-them for editing yet, so no editing capability is registered.
+a capability is registered once the application genuinely drives the tool end to
+end, which is why `edit.cut_silence` appears only now that milestone 1A runs it
+from the interface, and why transcription, zooms and B-roll still do not.
 
 Parameters are described with a deliberately small spec language (type, range,
 choices) so that the backend can validate a model's proposal exactly, and so
@@ -14,12 +15,12 @@ there is no parameter type that could hold one.
 
 from typing import Any
 
-from . import storage
+from . import cutting, storage
 from .tools import TOOL_LABELS, TOOL_NAMES
 
 # Bumped whenever a capability is added, removed or its parameters change.
 # Plans record the version they were generated against.
-CATALOG_VERSION = 1
+CATALOG_VERSION = 2
 
 # Kinds are how a capability is classified for the user. `diagnostic` means it
 # inspects the machine and reports; it never touches video.
@@ -32,6 +33,7 @@ KIND_LABELS = {
 }
 
 TOOL_CHECK = "diagnostics.tool_check"
+CUT_SILENCE = "edit.cut_silence"
 
 # Defence in depth. The whitelist below already makes these impossible, but a
 # plan that so much as *tries* to carry executable content is rejected loudly.
@@ -53,6 +55,43 @@ FORBIDDEN_PARAMETER_KEYS = frozenset(
         "path",
     }
 )
+
+
+def _cut_parameters() -> dict:
+    """Derive the capability's parameter specs from the cutting module.
+
+    One definition, two readers: the manual form and the planning layer see the
+    same names, units, defaults and limits, so a plan can never propose a value
+    the manual path would reject.
+    """
+    specs: dict = {}
+
+    for name, spec in cutting.SETTINGS_SPEC.items():
+        specs[name] = {
+            "type": "number",
+            "required": False,
+            "default": spec["default"],
+            "min": spec["min"],
+            "max": spec["max"],
+            "unit": spec["unit"],
+            "description": "%s (%s). ברירת מחדל: %s."
+            % (spec["description"], spec["unit"], spec["default"]),
+        }
+
+    specs["output_mode"] = {
+        "type": "string",
+        "required": False,
+        "choices": list(cutting.OUTPUT_MODES),
+        "default": cutting.DEFAULT_OUTPUT_MODE,
+        "description": "מה להפיק: %s."
+        % ", ".join(
+            "%s (%s)" % (mode["id"], mode["label"])
+            for mode in cutting.OUTPUT_MODES.values()
+        ),
+    }
+
+    return specs
+
 
 CAPABILITIES: dict[str, dict] = {
     TOOL_CHECK: {
@@ -79,13 +118,39 @@ CAPABILITIES: dict[str, dict] = {
                 "description": "אילו כלים לבדוק. ברירת המחדל: כל הכלים.",
             }
         },
-    }
+    },
+    CUT_SILENCE: {
+        "id": CUT_SILENCE,
+        "version": 1,
+        "kind": KIND_EDITING,
+        "title": "חיתוך שתיקות (Auto-Editor)",
+        "purpose": (
+            "חותכת שתיקות והפסקות מתוך חומרי גלם לפי עוצמת האודיו, מפיקה קובץ "
+            "MP4 חתוך לכל מקור לפי הסדר שנבחר, ולפי הבקשה גם מחברת אותם לסרטון "
+            "אחד. פועלת מקומית עם Auto-Editor ו־FFmpeg, לא משנה ולא מוחקת את "
+            "קובצי המקור, וכל הרצה כותבת לתיקייה חדשה משלה."
+        ),
+        "executable": True,
+        # Project sources only. Outputs of earlier runs are deliberately not
+        # accepted, so cutting never feeds on its own results by default.
+        "resource_types": ["video"],
+        "max_resources": cutting.MAX_SOURCES_PER_RUN,
+        "min_resources": 1,
+        "parameters": _cut_parameters(),
+        "limitations": [
+            "החיתוך מבוסס אודיו בלבד: קובץ ללא מסלול אודיו נדחה בבדיקה מראש.",
+            "חיבור לסרטון אחד דורש שכל הקטעים יהיו באותם ממדים וכיוון; ממדים "
+            "מעורבים מדווחים כמגבלה ולא נמתחים.",
+            "אין כרגע עריכה ידנית של גבולות החיתוך ואין מפת חיתוכים מלאה "
+            "ממקור לפלט.",
+            "הפלט תמיד MP4 (H.264 + AAC) בממדי המקור.",
+        ],
+    },
 }
 
 # Areas the user may well ask about, which have no capability yet. This list is
 # text for the model's benefit only — nothing here can be referenced by a plan.
 NOT_YET_SUPPORTED = [
-    "חיתוך אוטומטי של שתיקות (Auto-Editor)",
     "תמלול (Whisper) וכתוביות",
     "זומים ואפקטים",
     "B-roll והרכבת שכבות (Remotion)",

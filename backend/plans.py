@@ -194,6 +194,13 @@ def _validate_resource_ids(
 
         validated.append(entry)
 
+    min_resources = capability.get("min_resources", 0)
+    if len(validated) < min_resources:
+        raise PlanError(
+            "%s: היכולת הזו דורשת לפחות %d קבצים מהפרויקט."
+            % (action_label, min_resources)
+        )
+
     return validated
 
 

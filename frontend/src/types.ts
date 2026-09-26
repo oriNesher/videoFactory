@@ -148,6 +148,8 @@ export type ResourceCatalog = {
   catalog_version: number
   note: string
   resources: ProjectResource[]
+  /** Files this application produced. Never offered as cutting inputs. */
+  generated: GeneratedResource[]
   input_fingerprint: string
 }
 
@@ -228,4 +230,155 @@ export type PlanSummary = {
 export type PlanListing = {
   project_id: string
   plans: PlanSummary[]
+}
+
+// --- cutting (milestone 1A) --------------------------------------------------
+
+export type CuttingParameterSpec = {
+  name: string
+  type: 'number'
+  default: number
+  min: number
+  max: number
+  step: number
+  unit: string
+  label: string
+  description: string
+  /** Which Auto-Editor flag this value ends up in. Shown so the mapping is visible. */
+  maps_to: string
+}
+
+export type CuttingOutputMode = {
+  id: 'clips' | 'combined' | 'both'
+  label: string
+  description: string
+}
+
+export type CuttingCatalog = {
+  defaults: Record<string, number>
+  default_output_mode: string
+  parameters: CuttingParameterSpec[]
+  output_modes: CuttingOutputMode[]
+  max_sources_per_run: number
+}
+
+export type CuttingSettings = {
+  project_id: string
+  catalog: CuttingCatalog
+  settings: Record<string, number>
+  output_mode: string
+  source_ids: string[]
+}
+
+export type StreamInfo = {
+  codec_name: string
+  width?: number
+  height?: number
+  pix_fmt?: string
+  frame_rate?: number | null
+  sample_rate?: number | null
+  channels?: number | null
+} | null
+
+export type CutRunSource = {
+  source_id: string
+  order: number
+  filename: string
+  duration_seconds: number | null
+  fingerprint: { method: string; digest: string; size_bytes: number }
+  video: StreamInfo
+  audio: StreamInfo
+}
+
+export type CutClipStatus =
+  | 'succeeded'
+  | 'empty'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+
+export type CutClip = {
+  output_id: string
+  source_id: string
+  order: number
+  source_filename: string
+  source_duration_seconds: number | null
+  filename: string | null
+  relative_path: string | null
+  status: CutClipStatus
+  duration_seconds: number | null
+  size_bytes: number | null
+  removed_seconds: number | null
+  video: StreamInfo
+  audio: StreamInfo
+  error: string | null
+  exit_code?: number
+  command?: string
+  log_path: string | null
+  /** Derived server-side: is there a file behind this entry right now? */
+  playable: boolean
+}
+
+export type CutCombined = {
+  output_id: string
+  requested: boolean
+  filename: string
+  status: CutClipStatus
+  strategy: string | null
+  clip_output_ids: string[]
+  /** False when clips the user selected were left out of the joined file. */
+  complete: boolean
+  excluded_clips: { output_id: string; source_filename: string }[]
+  duration_seconds: number | null
+  expected_duration_seconds: number
+  size_bytes: number | null
+  video: StreamInfo
+  audio: StreamInfo
+  error: string | null
+  playable: boolean
+}
+
+export type CutRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export type CutRun = {
+  schema_version: number
+  run_id: string
+  project_id: string
+  job_id: string
+  created_at: string
+  finished_at: string | null
+  status: CutRunStatus
+  settings: Record<string, number>
+  output_mode: string
+  tool_versions: Record<string, string | null>
+  sources: CutRunSource[]
+  clips: CutClip[]
+  combined: CutCombined | null
+  error: string | null
+  notes: string[]
+  /** Derived server-side. */
+  source_duration_seconds: number
+  clip_duration_seconds: number
+  removed_duration_seconds: number
+  is_complete_result: boolean
+}
+
+export type CutRunListing = {
+  project_id: string
+  runs: CutRun[]
+}
+
+export type GeneratedResource = {
+  id: string
+  run_id: string
+  run_status: CutRunStatus
+  output_id: string
+  kind: 'trimmed_clip' | 'combined_video'
+  filename: string
+  media_type: string
+  produced_by: string
+  from_source_id: string | null
+  duration_seconds: number | null
+  size_bytes: number | null
+  created_at: string
 }

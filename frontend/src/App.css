@@ -427,3 +427,130 @@ select:focus-visible {
   border-top: 1px solid var(--border);
   padding-top: 16px;
 }
+
+/* --- cutting (milestone 1A) ------------------------------------------------ */
+
+.badge.ok {
+  color: var(--ok);
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+}
+
+.message.warn {
+  color: var(--warn);
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.settings-grid .field {
+  gap: 4px;
+}
+
+.settings-grid input[type='number'] {
+  font: inherit;
+  font-size: 15px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  /* The value is a number, so it reads left-to-right even in an RTL page. */
+  direction: ltr;
+  text-align: start;
+}
+
+.settings-grid input[type='number']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.choices {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.choices li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sources.compact li {
+  padding: 6px 10px;
+}
+
+.clips {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.clips li {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+
+.clips li.muted {
+  opacity: 0.75;
+}
+
+.output {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+
+.output video {
+  width: 100%;
+  max-width: 420px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+a.download {
+  align-self: center;
+  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-h);
+  text-decoration: none;
+}
+
+a.download:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.combined {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.combined h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

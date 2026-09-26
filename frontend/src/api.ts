@@ -1,5 +1,8 @@
 import type {
   CapabilityCatalog,
+  CutRun,
+  CutRunListing,
+  CuttingSettings,
   Job,
   JobListing,
   LlmStatus,
@@ -195,4 +198,66 @@ export function executePlanRevision(
     `/projects/${projectId}/plans/${planId}/revisions/${revision}/execute`,
     { method: 'POST' },
   )
+}
+
+// --- cutting (milestone 1A) --------------------------------------------------
+
+export function getCuttingSettings(projectId: string) {
+  return request<CuttingSettings>(`/projects/${projectId}/cutting/settings`)
+}
+
+export function saveCuttingSettings(
+  projectId: string,
+  settings: Record<string, number>,
+  outputMode: string,
+  sourceIds: string[],
+) {
+  return request<CuttingSettings>(`/projects/${projectId}/cutting/settings`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      settings,
+      output_mode: outputMode,
+      source_ids: sourceIds,
+    }),
+  })
+}
+
+/** Returns the queued *job*: cutting always runs through the job queue. */
+export function startCuttingRun(
+  projectId: string,
+  sourceIds: string[],
+  settings: Record<string, number>,
+  outputMode: string,
+) {
+  return request<Job>(`/projects/${projectId}/cutting/runs`, {
+    method: 'POST',
+    body: JSON.stringify({
+      source_ids: sourceIds,
+      settings,
+      output_mode: outputMode,
+    }),
+  })
+}
+
+export function listCuttingRuns(projectId: string) {
+  return request<CutRunListing>(`/projects/${projectId}/cutting/runs`)
+}
+
+export function getCuttingRun(projectId: string, runId: string) {
+  return request<CutRun>(`/projects/${projectId}/cutting/runs/${runId}`)
+}
+
+/**
+ * The URL a <video> element plays from, and the one a download link points at.
+ *
+ * Both address a run id and an output id that the backend resolves inside that
+ * run's own directory. There is no endpoint that takes a filesystem path.
+ */
+export function outputUrl(
+  projectId: string,
+  runId: string,
+  outputId: string,
+  kind: 'stream' | 'download' = 'stream',
+) {
+  return `/api/projects/${projectId}/cutting/runs/${runId}/outputs/${outputId}/${kind}`
 }

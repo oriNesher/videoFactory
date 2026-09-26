@@ -472,19 +472,258 @@ The procedure is at the end of the README.
   multi-line values, no interpolation.
 - Windows path length still applies: keep `VIDEO_FACTORY_WORKSPACE` short.
 
-## Next: milestone 1A — manual Auto-Editor processing through the interface
+## Milestone 1A — manual Auto-Editor cutting through the interface
+
+Status: complete.
+
+### What was built
+
+The first module that actually edits video. It is the working replacement for
+`legacy/AutoEditor/RUN_EDIT.bat`, driven from the project screen rather than
+from a console window, and it runs from its own button — no prompt, no AI plan
+and no approval step.
+
+**Backend** (`backend/`):
+
+| File | Role |
+| --- | --- |
+| `media.py` | FFprobe inspection: input validation, output verification, file fingerprints, stream-compatibility comparison |
+| `processes.py` | Running external tools: argument lists, merged live output, process-**tree** cancellation |
+| `cutting.py` | Settings spec and validation, command construction, run directories and manifests, output resolution, generated-resource catalog |
+| `cut_runner.py` | The pipeline: trim each source in order, then join |
+| `api_cutting.py` | Settings, runs, and Range-capable media serving by id |
+| `tests/test_cutting.py` | 73 tests: pure validation and command construction, the job path with the tool layer stubbed, and real end-to-end runs on generated footage |
+
+Changed, not rewritten: `capabilities.py` (registers `edit.cut_silence`,
+`CATALOG_VERSION` → 2), `job_tasks.py` (the `cut_media` job type and the plan
+executor for the new capability), `resources.py` (a `generated` section,
+`RESOURCE_CATALOG_VERSION` → 2, and cutting settings excluded from the plan
+fingerprint), `plans.py` (`min_resources` enforcement), `models.py`, `main.py`.
+
+**Frontend** (`frontend/src/`): `CuttingPanel.tsx`, rendered inside the existing
+project editor, plus the new types and API calls. Playback is a plain `<video>`
+element — no Remotion, as scoped. No new dependency.
+
+Endpoints added:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/projects/{id}/cutting/settings` | Saved form plus the spec needed to render it |
+| `PUT` | `/projects/{id}/cutting/settings` | Persist selection, order, the five values, output mode |
+| `POST` | `/projects/{id}/cutting/runs` | Queue a cutting job (returns the job, not a result) |
+| `GET` | `/projects/{id}/cutting/runs` | Every run of this project, newest first |
+| `GET` | `/projects/{id}/cutting/runs/{run}` | One run manifest with derived fields |
+| `GET` | `/projects/{id}/cutting/runs/{run}/outputs/{output}/stream` | Playback, with `Range` support |
+| `GET` | `/projects/{id}/cutting/runs/{run}/outputs/{output}/download` | The same file as a download |
+
+### Verified Auto-Editor version and CLI behaviour
+
+Checked by running the installed binary, not from memory. **Auto-Editor 31.3.2**
+at `C:\tools\auto-editor.exe`; FFmpeg and FFprobe **8.1.2** at `C:\tools`.
+
+The legacy BAT's three editing arguments map like this:
+
+| BAT | Verified meaning on 31.3.2 | Used here as |
+| --- | --- | --- |
+| `--edit audio:0.04` | Loudness threshold as a 0–1 ratio. `--edit audio:threshold=0.04` produces an identical timeline (7.56s output from the same 12s input, both spellings). | `--edit audio:threshold=X` — the explicit form, because it says what the number means |
+| `--margin 0.00s,0.50s` | Two values: kept **before**, then **after**, each detected loud section. Confirmed by measurement: `0s,0s` → 2.04s clips, `0s,0.5s` → 2.52s clips on the same source. | `--margin BEFORE,AFTER` |
+| `--smooth 0.10s,0.60s` | `MINCUT,MINCLIP`. MINCUT is the shortest silence that will actually be removed — `--smooth 5s,0.6s` on material with 1.48s gaps produced **no cuts at all**. MINCLIP is the shortest speech segment kept — `--smooth 0.1s,5s` on 2.52s segments discarded everything. | `--smooth MINCUT,MINCLIP` |
+
+Two further behaviours found by running it, both of which shaped the design:
+
+- **`--progress machine`** emits `~done~total~eta` on **stdout**; errors go to
+  **stderr**. This is the source of the percentage, which is therefore a real
+  ratio of rendered frames rather than an invention.
+- **An all-cut timeline is not a crash.** Auto-Editor prints
+  `Error! Timeline is empty, nothing to do.` and exits **2**, writing no file.
+  A source with no audio stream exits **1** with
+  `audio: channel 'all' does not exist in any audio stream`.
+
+### Output and cancellation decisions
+
+**Every run owns a new directory.** The BAT began with
+`rmdir /s /q output\trimmed`. Here a run id names a fresh directory under
+`intermediates\cuts\`, so a rerun cannot destroy an earlier result and a failed
+run leaves its partial output in place to be examined. Nothing is ever deleted
+except a file the same run just created and then rejected.
+
+**Run ids are 12 hex characters, not 32.** Found by running it: with a deep
+workspace the output path passed Windows' 260-character limit, at which point
+**Auto-Editor exits zero and silently writes nothing**. Two changes came out of
+that — shorter ids, and a pre-flight path-length check that refuses the run up
+front and names the offending path and the environment variable to change. The
+failure is now one sentence instead of a tool that appears to succeed.
+
+**A zero exit code is never proof.** Every produced file is read back with
+FFprobe: it must exist, be non-empty, carry video and audio, and have a
+readable duration. The joined file is additionally checked against the sum of
+its parts and rejected if it disagrees.
+
+**Joining picks a strategy and records it.** Stream copy when every clip agrees
+on codec, dimensions, pixel format, frame rate, sample rate and channel count;
+otherwise a re-encode. The re-encode uses FFmpeg's concat **filter**, not the
+concat demuxer — measured: the demuxer on inputs differing in frame and sample
+rate produced **17.56s** of material that should have been **14.63s**, because
+it does not resample. The filter normalises each input first and produced
+14.633s.
+
+**Mixed dimensions are refused, not stretched.** `-f concat -c copy` across a
+640×360 and a 360×640 clip **exits 0** and yields a file with a plausible
+duration and a broken picture. Rather than attempt it, the clips are compared
+first and the combined output is refused with each clip's resolution named, and
+the interface says what would have to be normalised. Per-clip cutting is
+unaffected, which is the documented way forward.
+
+**A clip with nothing left is named, never dropped.** An empty timeline is
+recorded per clip with an explanation and a suggested setting change. The run
+continues, and the combined video is marked `complete: false` with the excluded
+takes listed, so it can never be presented as "all of your footage, joined". If
+*every* clip comes back empty the run fails with that reason.
+
+**Cancellation kills the tree.** Auto-Editor spawns its own encoder, so
+terminating only the launched process would leave it rendering in the
+background. `taskkill /F /T` takes the whole tree; the partial file is removed,
+the remaining clips are recorded as `skipped`, the join never starts, and the
+run is `cancelled`. A cancelled or failed run is never reported as a completed
+result — `is_complete_result` is derived from the run status, and a cancelled
+run contributes no project resources at all. A failed run *does* keep the clips
+it had already rendered and verified, each carrying `run_status`, because
+discarding finished work over a later failure is its own kind of data loss.
+
+**The job runs its snapshot.** Submitting resolves ids to paths, probes every
+file and takes a fingerprint (`sha256` of size plus the first and last mebibyte
+— a full hash of a multi-gigabyte take would cost minutes per run for no
+practical gain, and the method name is stored so it is never mistaken for a
+checksum). Editing the project afterwards cannot change what the run processes,
+and the manifest keeps the run identifiable as belonging to that snapshot.
+
+**Ids in, ids out.** The frontend names project source ids and, for playback,
+a run id and an output id. It never supplies an executable name, a flag, a
+command fragment or a path. Output ids are resolved through the run's own
+manifest and the resulting path is then checked to be inside that run's
+directory, so even a hand-edited manifest cannot make the server read elsewhere.
+There is deliberately no endpoint that accepts a filesystem path.
+
+**Cutting settings do not invalidate plans.** They live in
+`settings["cutting"]` and are excluded from the plan input fingerprint: a plan
+carries its own parameters, so nudging a threshold in the manual form must not
+mark every existing plan outdated.
+
+**Generated clips are not cutting inputs.** Outputs are catalogued separately
+from sources and the cutting module selects only from the project's source
+manifest, so a run can never silently feed on the previous run's output.
+
+### Checks performed
+
+Automated, on this machine:
+
+- `.venv\Scripts\python.exe -m pytest backend\tests -q` → **154 passed**
+  (81 from 0A/0B, plus 73 new). One 0B test was updated rather than deleted:
+  it asserted the catalog held only `diagnostics.tool_check`; it now asserts
+  that every catalogued capability has a registered executor — the invariant it
+  was actually protecting — and that cutting has left the "not yet supported"
+  text.
+  - Validation: defaults matching the BAT, ranges, non-numeric and unknown
+    keys, command-shaped keys, output modes, and the catalog exposing a unit,
+    a description and a default for every parameter.
+  - Command construction: the exact argument list against the verified flags,
+    number formatting, paths with spaces, quotes, ampersands and Hebrew kept as
+    single arguments, concat-list escaping, and the filter graph normalising
+    every input without scaling.
+  - Ordering: submitted order honoured over project order; duplicate, unknown
+    and empty selections refused.
+  - Pre-flight: no-audio, missing and unreadable files refused **before** the
+    job is queued; an over-long output path refused before anything renders.
+  - Failure: a non-zero tool exit, a missing executable, an empty timeline per
+    clip, every clip empty, mixed dimensions, and a join whose duration
+    disagrees with its parts (which falls back to re-encoding and then fails
+    honestly).
+  - Cancellation: a real FFmpeg render started, cancelled and confirmed stopped
+    with the output no longer growing; a real cutting job cancelled mid-render
+    and recorded as cancelled with no combined output, no registered resource
+    and the originals intact; the stubbed path proving the remaining clips and
+    the join never start; and `terminate_tree` proven to be the mechanism.
+  - Isolation and traceability: a second run leaving the first byte-identical,
+    the manifest carrying run/job ids, ordered sources, fingerprints, settings,
+    tool versions, per-clip status and measured durations, a retry producing a
+    separate run, and a run continuing on its snapshot after the project's
+    sources were removed mid-flight.
+  - Serving: playback by id, `Range` returning 206 with the right slice, the
+    Hebrew download header, and refusal of `../`-style, unknown and
+    failed-clip output ids and of another project's run.
+  - Real end-to-end on generated footage (12s and 8s of alternating tone and
+    silence, 320×180): silence genuinely removed, clips playable H.264/AAC at
+    source dimensions, the join equal to the sum of its parts, a bigger
+    trailing margin measurably keeping more material, and the mixed-dimension
+    limitation reported — then succeeding in clips-only mode.
+- `npm.cmd run build` (`tsc -b && vite build`) → **succeeded**, 23 modules.
+- `npm.cmd run lint` (oxlint) → five `set-state-in-effect` warnings, two of them
+  new and both the same mount-time fetch pattern already present in the 0A and
+  0B panels. The rule cannot see through the `await`.
+
+Integrated, against a real `uvicorn` process on a throwaway workspace:
+
+- Full flow over HTTP: create project → add an MP4 and an MKV with a Hebrew
+  name → a no-audio source refused with a readable message → settings saved →
+  run submitted in **reverse** of the project order → job succeeded with a real
+  percentage → clips shorter than their sources → combined produced by
+  `stream_copy` at 14.181s, the sum of 5.64s and 8.52s.
+- Serving: `Range: bytes=100-199` → 206 with exactly 100 bytes and a
+  `Content-Range`; full stream 200 with `Accept-Ranges`; the Hebrew clip's
+  download carrying `filename*=UTF-8''`.
+- Catalogs: three generated resources registered, the three sources unchanged,
+  no absolute path anywhere in the resource payload, and `edit.cut_silence`
+  present in `/capabilities`.
+- Restart: the backend was stopped and started again on the same workspace.
+  Settings, the run, per-clip statuses and durations, the combined output and
+  its strategy were all intact, and a `Range` request still returned 206.
+- FFprobe read the combined file back independently: `h264` 320×180 + `aac`,
+  14.181s.
+- The originals were byte-identical afterwards. The smoke workspace was
+  deleted; the real `workspace\` and its existing project were never touched.
+
+**Not verified here, and yours to judge:** whether a cut *sounds* right on a
+real talking-head take — clipped syllables, abrupt sentence endings, breaths
+left in, speech wrongly removed — and the RTL layout, the players and the
+buttons in a browser. No real footage was rendered. The procedure is at the end
+of the README, steps 19–28.
+
+### Known limitations
+
+- **Mixed dimensions cannot be joined.** Reported clearly with each clip's
+  resolution; no scaling, padding or rotation normalisation exists yet. Cutting
+  those takes separately works.
+- **Audio-driven only.** No transcript, no scene detection, no per-speaker
+  logic.
+- **No manual boundary editing and no full cut map.** The manifest records what
+  went in, what came out and how long each result is — not the source
+  timestamps of each individual cut. That is 1B.
+- **Progress is a run-level average.** Real, but a long take and a short one
+  move the bar at different speeds.
+- **The join reads clip properties from the manifest**, which FFprobe wrote
+  moments earlier. A file replaced on disk between cutting and joining would
+  not be noticed within a run.
+- **Runs are never pruned**, like jobs and plans before them.
+- **One backend process only**, unchanged from 0B: the queue lives in it.
+- **Windows path length still applies**, now with a clear error instead of a
+  silent no-op. Keep `VIDEO_FACTORY_WORKSPACE` short.
+- **A run directory is not portable**: the manifest records absolute source
+  paths, like the project file.
+- **Cutting cannot yet consume generated clips**, by design. Re-cutting an
+  output means adding it as a project source by hand.
+
+## Next: milestone 1B — AI-assisted cutting settings and sample-based comparison
 
 Planned scope, not started:
 
-- Run Auto-Editor on a selected source through the job queue: explicit settings
-  in the interface (threshold, margin, output name), streamed progress derived
-  from the tool's own output, and cancellation that actually terminates the
-  child process.
-- Write results into `intermediates\` with a record of which source, which
-  settings and which job produced them, so a cut can be reproduced or discarded.
-- Register the first *editing* capability in the catalog once it genuinely runs,
-  so a plan can reference cutting rather than only diagnostics.
-- Handle real failure modes: a missing tool, a corrupt source, a file already
-  open elsewhere, and a run that produces nothing.
-- Still out of scope: Whisper transcription, zoom rendering, Remotion, B-roll,
-  audio and OBS control.
+- Let the model propose the five cutting settings for a specific take, as an
+  editable plan referencing the now-registered `edit.cut_silence` capability —
+  the manual path stays the default and keeps working without it.
+- Cut a short sample rather than the whole take, so several settings can be
+  compared cheaply before committing to a full render.
+- Present those samples side by side with their measured durations and removed
+  time, and let the chosen one be applied to the full source.
+- Persist a full source-to-output cut map, and the beginnings of manual
+  boundary editing on top of it.
+- Still out of scope: transcription, captions, zooms, Remotion, B-roll, music,
+  sound effects and OBS control.

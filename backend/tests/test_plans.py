@@ -25,6 +25,7 @@ from backend.config import (  # noqa: E402
 from backend.main import app  # noqa: E402
 
 TOOL_CHECK = capabilities.TOOL_CHECK
+CUT_SILENCE = capabilities.CUT_SILENCE
 
 
 @pytest.fixture(autouse=True)
@@ -107,14 +108,30 @@ def execute(client, project_id, plan_id, revision):
 
 
 def test_capability_catalog_only_lists_implemented_capabilities(client):
-    catalog = client.get("/capabilities").json()
-    ids = [capability["id"] for capability in catalog["capabilities"]]
+    """Every catalogued capability must be one the backend can actually run.
 
-    assert ids == [TOOL_CHECK]
-    assert catalog["capabilities"][0]["kind"] == capabilities.KIND_DIAGNOSTIC
-    assert catalog["capabilities"][0]["executable"] is True
-    # Editing areas are described as unsupported text, not as capabilities.
+    The point of this test is not the list itself but the invariant: a
+    capability appears here only once something executes it. Milestone 1A adds
+    cutting, so cutting appears — and disappears from the "not yet" text.
+    """
+    from backend import job_tasks
+
+    catalog = client.get("/capabilities").json()
+    by_id = {capability["id"]: capability for capability in catalog["capabilities"]}
+
+    assert sorted(by_id) == sorted([TOOL_CHECK, CUT_SILENCE])
+
+    for capability in by_id.values():
+        assert capability["executable"] is True
+        assert capability["id"] in job_tasks.EXECUTORS
+
+    assert by_id[TOOL_CHECK]["kind"] == capabilities.KIND_DIAGNOSTIC
+    assert by_id[CUT_SILENCE]["kind"] == capabilities.KIND_EDITING
+
+    # Areas with no implementation are still described as unsupported text
+    # rather than as capabilities — and cutting is no longer among them.
     assert catalog["not_yet_supported"]
+    assert not any("Auto-Editor" in entry for entry in catalog["not_yet_supported"])
 
 
 def test_resource_catalog_exposes_ids_not_local_paths(client, project, video):

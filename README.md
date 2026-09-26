@@ -9,8 +9,9 @@ configure a real AI provider, asking for an editing plan sends text and
 metadata — never media — to that provider. See
 [AI plans](#ai-plans-mock-mode-and-the-real-provider).
 
-Current state: **milestone 0B** — projects, background jobs, and structured
-editing plans proposed by AI and approved by you. See
+Current state: **milestone 1A** — projects, background jobs, structured AI
+editing plans, and the first real editing module: **cutting silences with
+Auto-Editor**, configured and run from the interface. See
 [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Requirements
@@ -114,9 +115,10 @@ Cancellation is reported honestly: a queued job is cancelled immediately, while
 a running job is *asked* to stop and stays "running, cancellation requested"
 until it actually stops.
 
-The only work this milestone can run is the processing-tool check — the same
-FFmpeg / FFprobe / Auto-Editor checks as the **כלים** tab, but queued, with
-progress, results, cancellation and retry.
+Two kinds of work run in the queue today: the processing-tool check, and
+**cutting** (see below). Cancelling a cutting job kills the encoder *and its
+child processes*, so nothing keeps rendering in the background after you press
+**בטל**.
 
 ## AI plans, mock mode and the real provider
 
@@ -127,10 +129,15 @@ executable expression — there is no field that could hold one. The model
 proposes; the backend validates; **you** approve. Nothing runs without an
 explicit approval and an explicit **הרץ** press.
 
-Right now exactly one capability is registered — `diagnostics.tool_check`,
-classified as a **diagnostic** operation, not video editing. Cuts, captions,
-zooms, B-roll and audio are not registered, so a request for them is answered
-with an explanation rather than an invented plan.
+Two capabilities are registered: `diagnostics.tool_check` (a diagnostic) and
+`edit.cut_silence` (real video editing, added in milestone 1A). Captions,
+zooms, B-roll and audio are still not registered, so a request for them is
+answered with an explanation rather than an invented plan.
+
+**Cutting does not need the AI panel.** The normal flow is the **חיתוך שתיקות**
+section: pick takes, set the numbers, press **הרץ חיתוך**. No prompt, no plan,
+no approval step. The planning layer is an additional route to the same
+capability, not a gate in front of it.
 
 ### Mock mode (the default)
 
@@ -176,6 +183,113 @@ backend, open a project and ask for a plan, for example
 `בדוק אילו כלי עיבוד מותקנים`. The job in **משימות רקע** will show either a
 plan or a specific provider error.
 
+## Cutting silences (milestone 1A)
+
+The working replacement for `legacy/AutoEditor/RUN_EDIT.bat`. Open a project,
+scroll to **חיתוך שתיקות**:
+
+1. **Tick the takes** you want to cut. A source whose file is missing is shown
+   but cannot be ticked.
+2. **Set their order** with ↑ / ↓. This is the processing *and* joining order,
+   and it is independent of the order of the sources in the project.
+3. **Adjust the five settings** (below), or press **החזר ברירות מחדל**.
+4. **Choose what to produce**: separate trimmed clips, one combined video, or
+   both.
+5. **הרץ חיתוך**. The run is queued; progress, cancellation and retry are in
+   **משימות רקע**. When it finishes, the run appears in **הרצות קודמות** with a
+   player and a download link per output.
+
+**שמור הגדרות** persists the selection, the order, the five values and the
+output mode with the project, so they are there after a restart. Pressing
+**הרץ חיתוך** snapshots whatever is currently in the form — a run always
+processes what was submitted, even if you edit the project while it works.
+
+### The five settings
+
+Defaults are the legacy script's. They are a sensible starting point for these
+takes, not universal recommendations — expect to tune them per recording.
+
+| Setting | Unit | Default | Auto-Editor flag | What it does |
+| --- | --- | --- | --- | --- |
+| סף אודיו | ratio, 0–1 | `0.04` | `--edit audio:threshold=` | How loud counts as speech. `0.04` = 4% of full scale. **Lower keeps more audio; higher cuts more.** |
+| שוליים לפני דיבור | seconds | `0.00` | `--margin` (first value) | Kept before each detected phrase, so the first syllable is not clipped. |
+| שוליים אחרי דיבור | seconds | `0.50` | `--margin` (second value) | Kept after each detected phrase. Generous here avoids a clipped feeling at the end of a sentence. |
+| שתיקה מינימלית לחיתוך | seconds | `0.10` | `--smooth` (MINCUT) | Silence shorter than this is **not** cut. **Lower is more aggressive.** |
+| דיבור מינימלי לשמירה | seconds | `0.60` | `--smooth` (MINCLIP) | A speech segment shorter than this is treated as noise and removed. **Higher is more aggressive.** |
+
+Every value is validated by the backend against the range shown in the
+interface. The frontend never supplies an executable name, a command fragment
+or an output path — it names project source ids, and the backend builds the
+command as an argument list with no shell involved.
+
+### Inputs
+
+MKV, MP4 and MOV are the formats this was built and tested against; anything
+else the installed FFmpeg can decode will also work, since the check is a real
+FFprobe read rather than an extension test.
+
+Before anything is rendered, every selected file is probed. A file that is
+missing, unreadable, has no video stream, or has **no audio stream** is
+rejected with a specific message and the job is never queued. The no-audio case
+is not a bug: this mode decides where to cut by listening, so it has nothing to
+work with.
+
+### Outputs
+
+Every run gets its own directory. Nothing is ever overwritten or deleted —
+unlike the legacy BAT, which began by wiping its trimmed-output folder.
+
+```
+workspace\projects\<project-id>\intermediates\cuts\<run-id>\
+  manifest.json                    what ran, with what, and what came out
+  clips\0001_<take>_trimmed.mp4    one per source, numbered in run order
+  combined\combined.mp4            the joined video, when requested
+  concat-list.txt                  the FFmpeg concat list, when used
+  logs\                            each tool invocation and its full output
+```
+
+Clips are **MP4 (H.264 + AAC)** at the source's own dimensions — nothing is
+rescaled. That is what Auto-Editor produces and what a browser can play, so the
+same files serve preview, download and the next module.
+
+Joining picks a strategy and records which one it used:
+
+- **Stream copy** when every clip agrees on codec, dimensions, pixel format,
+  frame rate, sample rate and channel count. Fast and lossless.
+- **Re-encode** otherwise, through FFmpeg's concat *filter* (not the concat
+  demuxer, which does not resample and produces a file that drifts):
+  `libx264 -preset medium -crf 18 -pix_fmt yuv420p`, `aac -b:a 192k -ar 48000`,
+  `+faststart`.
+
+The joined file is probed afterwards and its duration compared with the sum of
+its parts. A join that exits zero and produces the wrong length is treated as a
+failure, not a result.
+
+### Known limitations
+
+- **Mixed dimensions cannot be joined.** If the selected takes are not all the
+  same resolution and orientation, the combined output is refused with a
+  message naming each clip's size. FFmpeg would copy them happily and hand back
+  a file with a broken picture. Run those takes as **separate clips**, or
+  re-record/normalise them to one size first. Per-clip cutting is unaffected.
+- **Cutting is audio-driven only.** No transcript, no scene detection.
+- **No manual boundary editing** and no full source-to-output cut map — that is
+  milestone 1B.
+- **Generated clips are not cutting inputs.** A run always reads the project's
+  original sources, so cutting never feeds on its own output by accident.
+- **A cancelled run registers nothing**, even for clips that had already
+  finished. A failed run does keep its finished clips, labelled as belonging to
+  a failed run.
+- **Windows path length.** The full path of an output file must stay under 255
+  characters. A run whose paths would be too long is refused up front with the
+  offending path, because past that limit Auto-Editor exits *zero* and writes
+  nothing. Keep `VIDEO_FACTORY_WORKSPACE` short.
+- **Progress is per clip.** The percentage is real — it comes from the tool's
+  own frame counter — but it is a run-level average, so a long take and a short
+  one advance the bar at different speeds.
+- **Runs are never pruned.** Delete a run directory by hand to reclaim space.
+
+
 ## Tests and build
 
 ```powershell
@@ -188,6 +302,11 @@ npm.cmd run build
 The Python tests use a throwaway workspace and a stubbed provider: they never
 touch `workspace\`, your footage, or the network.
 
+The cutting tests do run the real FFmpeg and Auto-Editor, but only on a few
+seconds of 320×180 test pattern that they generate themselves and delete
+afterwards. **None of your footage is ever rendered by the test suite.** If the
+tools are not on `PATH`, those tests skip rather than fail.
+
 ## Where files live
 
 | What | Where |
@@ -197,6 +316,10 @@ touch `workspace\`, your footage, or the network.
 | Editing plans | `workspace\projects\<project-id>\plans\<plan-id>\rev-000N.json` |
 | Plan approvals | `workspace\projects\<project-id>\plans\<plan-id>\rev-000N.approval.json` |
 | Generated intermediates | `workspace\projects\<project-id>\intermediates\` |
+| Cutting runs | `workspace\projects\<project-id>\intermediates\cuts\<run-id>\` |
+| Trimmed clips | `…\cuts\<run-id>\clips\NNNN_<take>_trimmed.mp4` |
+| Combined video | `…\cuts\<run-id>\combined\combined.mp4` |
+| Run manifest and tool logs | `…\cuts\<run-id>\manifest.json`, `…\logs\` |
 | Exports | `workspace\projects\<project-id>\exports\` |
 | Source footage | **stays where you recorded it** |
 
@@ -285,3 +408,37 @@ With a project open, scroll to **משימות רקע** and **תוכנית ערי
 18. Add another source file to the project. The plan is immediately marked
     `לא מעודכנת`, and both approval and execution are refused with a reason.
     Asking for a new plan produces a current one.
+
+### Cutting (milestone 1A)
+
+These are the checks that need a person: the automated suite proves the
+mechanism, but only you can tell whether a cut *sounds* right.
+
+19. In **חיתוך שתיקות**, tick one real talking-head take, leave the defaults,
+    choose **גם קטעים נפרדים וגם סרטון מאוחד**, and press **הרץ חיתוך**. The
+    job appears in **משימות רקע** with a moving percentage naming the clip it
+    is on, and the interface stays usable while it works.
+20. When it finishes, play the trimmed clip in place. **Listen for the things
+    only you can judge:** words clipped at the start of a phrase (raise
+    *שוליים לפני דיבור*), sentences that end too abruptly (raise
+    *שוליים אחרי דיבור*), breaths or filler left in (raise *סף אודיו*), and
+    speech wrongly removed (lower *סף אודיו* or *דיבור מינימלי לשמירה*).
+21. Drag the player's scrubber to the middle of the clip. It should seek
+    instantly. Press **הורד** and confirm the file opens in your usual player.
+22. Compare the original and output durations shown next to the clip against
+    your own sense of how much dead air the take had.
+23. Tick a second take, set the order with ↑ / ↓, and run again. The combined
+    video must join them in **that** order, not the project's order.
+24. Press **הרץ חיתוך** on a long take and then **בטל** in **משימות רקע** while
+    it is running. It must stop within a second or two; check Task Manager to
+    confirm no `ffmpeg.exe` or `auto-editor.exe` is still burning CPU. The run
+    is listed as בוטלה and offers no combined video.
+25. Press **הרץ שוב** on the cancelled job. A *new* run appears; the cancelled
+    one is still listed, unchanged.
+26. Change a setting, press **שמור הגדרות**, restart both terminals, and reopen
+    the project. The selection, the order, the five values, the output mode and
+    every previous run with its players are all still there.
+27. Rename a source file in Explorer and try to run. The error names the file
+    and nothing is queued. Rename it back.
+28. Confirm your original recordings are untouched: same names, same sizes,
+    same folder.

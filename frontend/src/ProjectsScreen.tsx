@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { addSource, createProject, listProjects, loadProject, saveProject } from './api'
+import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
 import PlanPanel from './PlanPanel'
 import type { Project, ProjectListing, SourceMedia } from './types'
@@ -382,6 +383,13 @@ export default function ProjectsScreen() {
             {draftSources.length === 0 && (
               <p className="hint">אין עדיין חומרי גלם בפרויקט.</p>
             )}
+
+            <CuttingPanel
+              key={project.id}
+              project={project}
+              refreshToken={plansRefresh}
+              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+            />
 
             <JobsPanel
               projectId={project.id}

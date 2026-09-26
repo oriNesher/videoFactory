@@ -1,11 +1,14 @@
 """The job types this milestone can actually run.
 
-Three of them, and only one touches the outside world:
+Four of them:
 
 - `tool_check`      — the milestone-0A processing-tool check, run in the queue.
+- `cut_media`       — milestone 1A: trim the selected project sources with
+                      Auto-Editor and, on request, join them with FFmpeg.
 - `plan_generation` — ask the configured provider for a plan proposal.
-- `plan_execution`  — run an approved plan. Today that can only be a diagnostic
-                      tool-check plan; there is no video-editing execution yet.
+- `plan_execution`  — run an approved plan. It can now drive real editing as
+                      well as diagnostics, through the same code path the
+                      manual button uses.
 
 Every handler cooperates with cancellation by calling `raise_if_cancelled`
 between steps, and reports a progress percentage only where there is a real
@@ -14,9 +17,20 @@ denominator to divide by.
 
 from typing import Any
 
-from . import capabilities, jobs, llm, plans, resources, storage, tools
+from . import (
+    capabilities,
+    cut_runner,
+    cutting,
+    jobs,
+    llm,
+    plans,
+    resources,
+    storage,
+    tools,
+)
 
 TOOL_CHECK_JOB = "tool_check"
+CUT_MEDIA_JOB = "cut_media"
 PLAN_GENERATION_JOB = "plan_generation"
 PLAN_EXECUTION_JOB = "plan_execution"
 
@@ -59,6 +73,23 @@ def _check_tools(context: jobs.JobContext | None, names: list[str]) -> dict:
 def run_tool_check(context: jobs.JobContext) -> dict:
     names = context.input.get("tools") or list(tools.TOOL_NAMES)
     return _check_tools(context, names)
+
+
+# --- cutting ----------------------------------------------------------------
+
+
+def validate_cut_media_input(project_id: str, raw: Any) -> dict:
+    """Resolve and freeze the request before it is allowed into the queue.
+
+    Everything expensive to get wrong is checked here, while the user is still
+    looking at the form: the ids exist in the project, the files are on disk,
+    FFprobe can read them, and each one carries the audio this mode needs.
+    """
+    return cutting.build_job_input(project_id, raw)
+
+
+def run_cut_media(context: jobs.JobContext) -> dict:
+    return cut_runner.run_cutting(context)
 
 
 # --- plan generation --------------------------------------------------------
@@ -174,7 +205,35 @@ def _execute_tool_check_action(context: jobs.JobContext, action: dict) -> dict:
     return _check_tools(context, names)
 
 
-EXECUTORS = {capabilities.TOOL_CHECK: _execute_tool_check_action}
+def _execute_cut_action(context: jobs.JobContext, action: dict) -> dict:
+    """Run a plan's cutting action through the same pipeline as the button.
+
+    The action names resource ids and parameters; the snapshot is built here,
+    at execution time, by the same validator the manual path uses. A plan never
+    carries a path, a command or an output location.
+    """
+    parameters = dict(action["parameters"])
+    output_mode = parameters.pop("output_mode", cutting.DEFAULT_OUTPUT_MODE)
+
+    try:
+        job_input = cutting.build_job_input(
+            context.project_id,
+            {
+                "source_ids": action["resource_ids"],
+                "settings": parameters,
+                "output_mode": output_mode,
+            },
+        )
+    except storage.ProjectError as error:
+        raise jobs.JobFailed(error.message) from error
+
+    return cut_runner.run_cutting(context, job_input)
+
+
+EXECUTORS = {
+    capabilities.TOOL_CHECK: _execute_tool_check_action,
+    capabilities.CUT_SILENCE: _execute_cut_action,
+}
 
 
 def run_plan_execution(context: jobs.JobContext) -> dict:
@@ -231,6 +290,13 @@ jobs.register_job_type(
     "בדיקת כלי עיבוד",
     run_tool_check,
     validate_tool_check_input,
+)
+
+jobs.register_job_type(
+    CUT_MEDIA_JOB,
+    "חיתוך שתיקות",
+    run_cut_media,
+    validate_cut_media_input,
 )
 
 jobs.register_job_type(
