@@ -26,10 +26,10 @@ const POLL_ACTIVE_MS = 1500
 const POLL_IDLE_MS = 10000
 
 const RUN_STATUS_LABELS: Record<string, string> = {
-  running: 'פועלת',
-  succeeded: 'הסתיימה',
-  failed: 'נכשלה',
-  cancelled: 'בוטלה',
+  running: 'Running',
+  succeeded: 'Finished',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
 }
 
 const RUN_STATUS_CLASS: Record<string, string> = {
@@ -40,11 +40,11 @@ const RUN_STATUS_CLASS: Record<string, string> = {
 }
 
 const CLIP_STATUS_LABELS: Record<string, string> = {
-  succeeded: 'הופק',
-  empty: 'לא נותר תוכן',
-  failed: 'נכשל',
-  skipped: 'לא עובד',
-  cancelled: 'בוטל',
+  succeeded: 'Produced',
+  empty: 'Nothing left',
+  failed: 'Failed',
+  skipped: 'Not processed',
+  cancelled: 'Cancelled',
 }
 
 const CLIP_STATUS_CLASS: Record<string, string> = {
@@ -72,7 +72,7 @@ function formatSize(bytes: number | null | undefined): string {
 function formatTime(value: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('he-IL')
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-US')
 }
 
 /** One playable output with its own controls. Plain <video>: no Remotion yet. */
@@ -101,7 +101,7 @@ function OutputPlayer({
         href={outputUrl(projectId, runId, outputId, 'download')}
         download={filename}
       >
-        הורד
+        Download
       </a>
     </div>
   )
@@ -134,7 +134,7 @@ function ClipRow({
         <span className="small mono">
           {formatDuration(clip.source_duration_seconds)} ←{' '}
           {formatDuration(clip.duration_seconds)}
-          {saved !== null && saved > 0 && ` (נחסכו ${formatDuration(saved)})`}
+          {saved !== null && saved > 0 && ` (saved ${formatDuration(saved)})`}
         </span>
       </div>
 
@@ -169,21 +169,21 @@ function RunCard({ projectId, run }: { projectId: string; run: CutRun }) {
     <li>
       <div className="job-header">
         <span className="job-title">
-          הרצת חיתוך
+          Cut run
           <span className={RUN_STATUS_CLASS[run.status] ?? 'badge'}>
             {RUN_STATUS_LABELS[run.status] ?? run.status}
           </span>
           <span className="small">{formatTime(run.created_at)}</span>
         </span>
         <button type="button" onClick={() => setOpen(!open)}>
-          {open ? 'הסתר פרטים' : 'הצג פרטים'}
+          {open ? 'Hide details' : 'Show details'}
         </button>
       </div>
 
       <p className="hint small">
-        {run.sources.length} מקורות · אורך מקורי{' '}
-        {formatDuration(run.source_duration_seconds)} · אחרי חיתוך{' '}
-        {formatDuration(run.clip_duration_seconds)} · נחסכו{' '}
+        {run.sources.length} sources · original length{' '}
+        {formatDuration(run.source_duration_seconds)} · after cutting{' '}
+        {formatDuration(run.clip_duration_seconds)} · saved{' '}
         {formatDuration(run.removed_duration_seconds)}
       </p>
 
@@ -191,27 +191,29 @@ function RunCard({ projectId, run }: { projectId: string; run: CutRun }) {
 
       {run.status !== 'succeeded' && (
         <p className="hint small">
-          ההרצה הזו אינה תוצאה מלאה. קבצים שכבר הופקו נשמרו ומסומנים למטה.
+          This run is not a complete result. Files that were already produced are
+          kept and marked below.
         </p>
       )}
 
       {run.combined && run.combined.status === 'succeeded' && (
         <div className="combined">
           <h4>
-            סרטון מאוחד
+            Combined video
             {run.combined.complete === false && (
-              <span className="badge warn">חסרים קטעים</span>
+              <span className="badge warn">Clips missing</span>
             )}
             <span className="badge">
               {run.combined.strategy === 'stream_copy'
-                ? 'ללא קידוד מחדש'
-                : 'עם קידוד מחדש'}
+                ? 'no re-encoding'
+                : 're-encoded'}
             </span>
           </h4>
 
           {run.combined.complete === false && (
             <p className="message warn">
-              הסרטון המאוחד אינו כולל את הקבצים שלא נותר בהם תוכן אחרי החיתוך:{' '}
+              The combined video leaves out the files that had nothing left after
+              cutting:{' '}
               {run.combined.excluded_clips
                 .map((entry) => entry.source_filename)
                 .join(', ')}
@@ -238,7 +240,7 @@ function RunCard({ projectId, run }: { projectId: string; run: CutRun }) {
 
       {open && (
         <>
-          <h4>קטעים ({run.clips.length})</h4>
+          <h4>Clips ({run.clips.length})</h4>
           <ul className="clips">
             {run.clips.map((clip) => (
               <ClipRow
@@ -250,16 +252,16 @@ function RunCard({ projectId, run }: { projectId: string; run: CutRun }) {
             ))}
           </ul>
 
-          <h4>ההגדרות של ההרצה הזו</h4>
+          <h4>Settings used by this run</h4>
           <p className="hint small mono">
-            סף {run.settings.audio_threshold} · שוליים{' '}
+            threshold {run.settings.audio_threshold} · margins{' '}
             {run.settings.margin_before_seconds}s/{run.settings.margin_after_seconds}s
-            · שתיקה מינ' {run.settings.min_silence_seconds}s · דיבור מינ'{' '}
+            · min silence {run.settings.min_silence_seconds}s · min speech{' '}
             {run.settings.min_speech_seconds}s
           </p>
           <p className="hint small mono">
-            מזהה הרצה {run.run_id} · משימה {run.job_id} ·{' '}
-            {run.tool_versions.auto_editor ?? 'Auto-Editor לא ידוע'}
+            run {run.run_id} · job {run.job_id} ·{' '}
+            {run.tool_versions.auto_editor ?? 'Auto-Editor version unknown'}
           </p>
         </>
       )}
@@ -315,7 +317,7 @@ export default function CuttingPanel({
       setSelected(loaded.source_ids)
       setError('')
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'טעינת ההגדרות נכשלה.')
+      setError(caught instanceof Error ? caught.message : 'Loading the settings failed.')
     }
   }, [project.id])
 
@@ -324,7 +326,7 @@ export default function CuttingPanel({
       const listing = await listCuttingRuns(project.id)
       setRuns(listing.runs)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'טעינת ההרצות נכשלה.')
+      setError(caught instanceof Error ? caught.message : 'Loading the runs failed.')
     }
   }, [project.id])
 
@@ -380,7 +382,7 @@ export default function CuttingPanel({
   function restoreDefaults() {
     if (!catalog) return
     setSettings({ ...catalog.defaults })
-    setMessage('הוחזרו ערכי ברירת המחדל. לחץ "שמור הגדרות" כדי לשמור אותם.')
+    setMessage('Defaults restored. Press "Save settings" to keep them.')
   }
 
   async function act(action: () => Promise<unknown>, success: string) {
@@ -391,7 +393,7 @@ export default function CuttingPanel({
       await action()
       setMessage(success)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'הפעולה נכשלה.')
+      setError(caught instanceof Error ? caught.message : 'The action failed.')
     } finally {
       setBusy(false)
     }
@@ -405,7 +407,7 @@ export default function CuttingPanel({
   return (
     <section className="panel subpanel">
       <div className="editor-header">
-        <h3>חיתוך שתיקות</h3>
+        <h3>Silence cutting</h3>
         <div className="row">
           <button
             type="button"
@@ -422,10 +424,10 @@ export default function CuttingPanel({
                 setWatching(job.id)
                 notify.current()
                 await refreshRuns()
-              }, 'ההרצה נוספה לתור. אפשר להמשיך לעבוד בינתיים.')
+              }, 'The run was queued. You can keep working meanwhile.')
             }
           >
-            הרץ חיתוך
+            Run cut
           </button>
           <button
             type="button"
@@ -439,28 +441,29 @@ export default function CuttingPanel({
                   selected,
                 )
                 setSettings(saved.settings)
-              }, 'ההגדרות נשמרו עם הפרויקט.')
+              }, 'The settings were saved with the project.')
             }
           >
-            שמור הגדרות
+            Save settings
           </button>
         </div>
       </div>
 
       <p className="hint small">
-        חותך שתיקות לפי עוצמת האודיו עם Auto-Editor, ולפי הבחירה גם מחבר את
-        הקטעים ל־MP4 אחד עם FFmpeg. קובצי המקור לא משתנים, וכל הרצה נכתבת
-        לתיקייה חדשה משלה. ביטול ושחזור נמצאים בלוח <strong>משימות רקע</strong>.
+        Cuts silence by audio loudness with Auto-Editor and, if you ask for it,
+        joins the clips into one MP4 with FFmpeg. Your source files are never
+        changed, and every run writes to its own new directory. Cancel and re-run
+        live in the <strong>Background jobs</strong> panel.
       </p>
 
       {error && <p className="message error">{error}</p>}
       {message && <p className="message ok">{message}</p>}
 
-      <h4>בחירת חומרי גלם וסדר עיבוד</h4>
+      <h4>Footage and processing order</h4>
 
       {available.length === 0 && (
         <p className="hint">
-          אין חומרי גלם זמינים בפרויקט. הוסף קובץ למעלה כדי להתחיל.
+          No footage is available in this project. Add a folder above to get started.
         </p>
       )}
 
@@ -476,7 +479,7 @@ export default function CuttingPanel({
               />
               <span>{source.filename}</span>
             </label>
-            {!source.exists && <span className="badge bad">קובץ חסר</span>}
+            {!source.exists && <span className="badge bad">File missing</span>}
           </li>
         ))}
       </ul>
@@ -484,8 +487,8 @@ export default function CuttingPanel({
       {orderedSelection.length > 0 && (
         <>
           <p className="hint small">
-            סדר העיבוד והחיבור. אפשר לשנות אותו בלי לשנות את סדר חומרי הגלם
-            בפרויקט.
+            The processing and join order. You can change it without changing the
+            order of the footage in the project.
           </p>
           <ol className="sources compact">
             {orderedSelection.map((source, index) => (
@@ -499,7 +502,7 @@ export default function CuttingPanel({
                     type="button"
                     onClick={() => move(index, -1)}
                     disabled={index === 0}
-                    title="העבר למעלה"
+                    title="Move up"
                   >
                     ↑
                   </button>
@@ -507,12 +510,12 @@ export default function CuttingPanel({
                     type="button"
                     onClick={() => move(index, 1)}
                     disabled={index === orderedSelection.length - 1}
-                    title="העבר למטה"
+                    title="Move down"
                   >
                     ↓
                   </button>
                   <button type="button" onClick={() => toggle(source.id)}>
-                    הסר
+                    Remove
                   </button>
                 </span>
               </li>
@@ -522,9 +525,9 @@ export default function CuttingPanel({
       )}
 
       <div className="editor-header">
-        <h4>הגדרות חיתוך</h4>
+        <h4>Cut settings</h4>
         <button type="button" onClick={restoreDefaults} disabled={busy || !catalog}>
-          החזר ברירות מחדל
+          Restore defaults
         </button>
       </div>
 
@@ -544,14 +547,14 @@ export default function CuttingPanel({
             />
             <span className="hint small">{parameter.description}</span>
             <span className="hint small mono">
-              {parameter.maps_to} · טווח {parameter.min}–{parameter.max} · ברירת
-              מחדל {parameter.default}
+              {parameter.maps_to} · range {parameter.min}–{parameter.max} ·
+              default {parameter.default}
             </span>
           </label>
         ))}
       </div>
 
-      <h4>מה להפיק</h4>
+      <h4>What to produce</h4>
       <ul className="choices">
         {catalog?.output_modes.map((mode) => (
           <li key={mode.id}>
@@ -569,10 +572,10 @@ export default function CuttingPanel({
         ))}
       </ul>
 
-      <h4>הרצות קודמות ({runs.length})</h4>
+      <h4>Previous runs ({runs.length})</h4>
 
       {runs.length === 0 && (
-        <p className="hint">עדיין לא בוצעו הרצות חיתוך בפרויקט הזה.</p>
+        <p className="hint">No cut runs have been made in this project yet.</p>
       )}
 
       <ul className="jobs">

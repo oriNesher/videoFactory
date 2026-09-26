@@ -1,4 +1,5 @@
 import type {
+  AddDirectoryResult,
   CapabilityCatalog,
   CutRun,
   CutRunListing,
@@ -27,7 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
     })
   } catch {
-    throw new Error('אין חיבור לשרת. ודא ששירות הפייתון פועל.')
+    throw new Error('No connection to the server. Check that the Python service is running.')
   }
 
   if (!response.ok) {
@@ -45,13 +46,13 @@ async function readError(response: Response): Promise<string> {
       return body.detail
     }
     if (Array.isArray(body?.detail) && body.detail.length > 0) {
-      return `הבקשה נדחתה: ${body.detail[0]?.msg ?? response.status}`
+      return `The request was rejected: ${body.detail[0]?.msg ?? response.status}`
     }
   } catch {
     // fall through to the generic message
   }
 
-  return `הפעולה נכשלה (שגיאה ${response.status}).`
+  return `The action failed (error ${response.status}).`
 }
 
 export function listProjects() {
@@ -84,6 +85,20 @@ export function addSource(projectId: string, path: string) {
   return request<Project>(`/projects/${projectId}/sources`, {
     method: 'POST',
     body: JSON.stringify({ path }),
+  })
+}
+
+/**
+ * Add a whole folder of clips, ordered by file name.
+ *
+ * With no `path` the backend opens the machine's own folder dialog, because a
+ * browser never tells a page where a folder really is on disk. That request
+ * stays open for as long as the dialog is on screen.
+ */
+export function addSourceDirectory(projectId: string, path?: string) {
+  return request<AddDirectoryResult>(`/projects/${projectId}/sources/directory`, {
+    method: 'POST',
+    body: JSON.stringify({ path: path ?? null }),
   })
 }
 

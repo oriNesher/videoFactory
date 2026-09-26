@@ -30,7 +30,7 @@ export default function ToolsPanel() {
       setStatuses(toolStatuses)
       setVersions(toolVersions)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'הבדיקה נכשלה.')
+      setError(caught instanceof Error ? caught.message : 'The check failed.')
       setStatuses(null)
       setVersions(null)
     } finally {
@@ -40,13 +40,13 @@ export default function ToolsPanel() {
 
   return (
     <section className="panel">
-      <h2>כלי עיבוד</h2>
+      <h2>Processing tools</h2>
       <p className="hint">
-        בדיקה שהכלים החיצוניים זמינים ל־Video Factory דרך ה־PATH של המערכת.
+        Checks that the external tools are reachable by Video Factory through the system PATH.
       </p>
 
       <button type="button" className="primary" onClick={run} disabled={busy}>
-        {busy ? 'בודק…' : 'בדוק כלים'}
+        {busy ? 'Checking…' : 'Check tools'}
       </button>
 
       {error && <p className="message error">{error}</p>}
@@ -55,10 +55,10 @@ export default function ToolsPanel() {
         <table className="tools">
           <thead>
             <tr>
-              <th>כלי</th>
-              <th>זמין</th>
-              <th>גרסה</th>
-              <th>נתיב</th>
+              <th>Tool</th>
+              <th>Available</th>
+              <th>Version</th>
+              <th>Path</th>
             </tr>
           </thead>
           <tbody>
@@ -68,7 +68,7 @@ export default function ToolsPanel() {
                 <tr key={key}>
                   <td>{TOOL_LABELS[key] ?? key}</td>
                   <td className={status.available ? 'ok' : 'bad'}>
-                    {status.available ? 'כן' : 'לא'}
+                    {status.available ? 'Yes' : 'No'}
                   </td>
                   <td className="mono small">
                     {version?.working ? version.version : (version?.error ?? '—')}

@@ -107,8 +107,8 @@ inside an HTTP request, so the interface stays usable. One job runs at a time.
 
 Every job is a JSON file under its project, which means job state and results
 survive a backend restart. A job that was still queued or running when the
-backend stopped is marked **נקטעה** (interrupted) on the next start — never
-silently re-run — and you decide whether to retry it. **הרץ שוב** always starts
+backend stopped is marked **Interrupted** on the next start — never
+silently re-run — and you decide whether to retry it. **Run again** always starts
 a *new* job from the original input snapshot; the old record is kept.
 
 Cancellation is reported honestly: a queued job is cancelled immediately, while
@@ -118,7 +118,7 @@ until it actually stops.
 Two kinds of work run in the queue today: the processing-tool check, and
 **cutting** (see below). Cancelling a cutting job kills the encoder *and its
 child processes*, so nothing keeps rendering in the background after you press
-**בטל**.
+**Cancel**.
 
 ## AI plans, mock mode and the real provider
 
@@ -127,15 +127,15 @@ name a backend-registered capability, project resource ids and validated
 parameters. A plan can never contain a shell command, a script or any
 executable expression — there is no field that could hold one. The model
 proposes; the backend validates; **you** approve. Nothing runs without an
-explicit approval and an explicit **הרץ** press.
+explicit approval and an explicit **Run** press.
 
 Two capabilities are registered: `diagnostics.tool_check` (a diagnostic) and
 `edit.cut_silence` (real video editing, added in milestone 1A). Captions,
 zooms, B-roll and audio are still not registered, so a request for them is
 answered with an explanation rather than an invented plan.
 
-**Cutting does not need the AI panel.** The normal flow is the **חיתוך שתיקות**
-section: pick takes, set the numbers, press **הרץ חיתוך**. No prompt, no plan,
+**Cutting does not need the AI panel.** The normal flow is the **Silence cutting**
+section: pick takes, set the numbers, press **Run cut**. No prompt, no plan,
 no approval step. The planning layer is an additional route to the same
 capability, not a gate in front of it.
 
@@ -143,7 +143,7 @@ capability, not a gate in front of it.
 
 With `VIDEO_FACTORY_LLM_PROVIDER=mock` nothing needs a key and nothing touches
 the network: plans come from fixed local rules. The interface labels this
-clearly (**מצב הדגמה (ללא AI)**) on the panel and on every plan it produced. It
+clearly (**Demo mode (no AI)**) on the panel and on every plan it produced. It
 is never presented as a model's answer.
 
 ### The real provider
@@ -180,28 +180,29 @@ queue.
 **No live call to the paid API has been made from this repository.** To verify
 your own setup — at your own cost — configure the key as above, restart the
 backend, open a project and ask for a plan, for example
-`בדוק אילו כלי עיבוד מותקנים`. The job in **משימות רקע** will show either a
+`check which processing tools are installed`. The job in **Background jobs**
+will show either a
 plan or a specific provider error.
 
 ## Cutting silences (milestone 1A)
 
 The working replacement for `legacy/AutoEditor/RUN_EDIT.bat`. Open a project,
-scroll to **חיתוך שתיקות**:
+scroll to **Silence cutting**:
 
 1. **Tick the takes** you want to cut. A source whose file is missing is shown
    but cannot be ticked.
 2. **Set their order** with ↑ / ↓. This is the processing *and* joining order,
    and it is independent of the order of the sources in the project.
-3. **Adjust the five settings** (below), or press **החזר ברירות מחדל**.
+3. **Adjust the five settings** (below), or press **Restore defaults**.
 4. **Choose what to produce**: separate trimmed clips, one combined video, or
    both.
-5. **הרץ חיתוך**. The run is queued; progress, cancellation and retry are in
-   **משימות רקע**. When it finishes, the run appears in **הרצות קודמות** with a
+5. **Run cut**. The run is queued; progress, cancellation and retry are in
+   **Background jobs**. When it finishes, the run appears in **Previous runs** with a
    player and a download link per output.
 
-**שמור הגדרות** persists the selection, the order, the five values and the
+**Save settings** persists the selection, the order, the five values and the
 output mode with the project, so they are there after a restart. Pressing
-**הרץ חיתוך** snapshots whatever is currently in the form — a run always
+**Run cut** snapshots whatever is currently in the form — a run always
 processes what was submitted, even if you edit the project while it works.
 
 ### The five settings
@@ -211,11 +212,11 @@ takes, not universal recommendations — expect to tune them per recording.
 
 | Setting | Unit | Default | Auto-Editor flag | What it does |
 | --- | --- | --- | --- | --- |
-| סף אודיו | ratio, 0–1 | `0.04` | `--edit audio:threshold=` | How loud counts as speech. `0.04` = 4% of full scale. **Lower keeps more audio; higher cuts more.** |
-| שוליים לפני דיבור | seconds | `0.00` | `--margin` (first value) | Kept before each detected phrase, so the first syllable is not clipped. |
-| שוליים אחרי דיבור | seconds | `0.50` | `--margin` (second value) | Kept after each detected phrase. Generous here avoids a clipped feeling at the end of a sentence. |
-| שתיקה מינימלית לחיתוך | seconds | `0.10` | `--smooth` (MINCUT) | Silence shorter than this is **not** cut. **Lower is more aggressive.** |
-| דיבור מינימלי לשמירה | seconds | `0.60` | `--smooth` (MINCLIP) | A speech segment shorter than this is treated as noise and removed. **Higher is more aggressive.** |
+| Audio threshold | ratio, 0–1 | `0.04` | `--edit audio:threshold=` | How loud counts as speech. `0.04` = 4% of full scale. **Lower keeps more audio; higher cuts more.** |
+| Margin before speech | seconds | `0.00` | `--margin` (first value) | Kept before each detected phrase, so the first syllable is not clipped. |
+| Margin after speech | seconds | `0.50` | `--margin` (second value) | Kept after each detected phrase. Generous here avoids a clipped feeling at the end of a sentence. |
+| Minimum silence to cut | seconds | `0.10` | `--smooth` (MINCUT) | Silence shorter than this is **not** cut. **Lower is more aggressive.** |
+| Minimum speech to keep | seconds | `0.60` | `--smooth` (MINCLIP) | A speech segment shorter than this is treated as noise and removed. **Higher is more aggressive.** |
 
 Every value is validated by the backend against the range shown in the
 interface. The frontend never supplies an executable name, a command fragment
@@ -342,14 +343,22 @@ moves, copies, renames or overwrites your footage — recordings are large and
 belong wherever you put them. The consequences are worth knowing:
 
 - Moving or renaming a file after adding it breaks the reference. The project
-  still opens; the file is marked `קובץ חסר` and everything else keeps working.
+  still opens; the file is marked `File missing` and everything else keeps working.
 - Removing a source in the interface removes only the reference. The file on
   disk is untouched.
 - The project file is not portable to another machine unless the same paths
   exist there.
 
-Paths are typed or pasted as text. A browser file input cannot hand a web page a
-real absolute path, so it would be a false convenience here. Paths copied with
+Footage is added a folder at a time. **Upload folder…** asks the *backend* to
+open the machine's own folder dialog, because a browser file input never hands a
+web page a real absolute path — it hands over file contents, which would mean
+copying gigabytes of footage into the workspace for no gain. The dialog returns
+a true path, every video file directly inside that folder is added in the order
+Explorer shows them (`take2` before `take10`), and anything that is not a video
+is skipped and reported. A folder added twice adds only what is new.
+
+This works because the backend and the browser are the same machine. Where the
+dialog cannot open at all, a path field appears as a fallback; paths copied with
 Explorer's "Copy as path" (wrapped in double quotes) are accepted as-is.
 
 ## Manual verification
@@ -358,55 +367,59 @@ With both services running, at <http://localhost:5173>:
 
 ### Projects (milestone 0A)
 
-1. **Tools** tab → **בדוק כלים**. FFmpeg, FFprobe and Auto-Editor should each
-   show זמין = כן with a version and a `C:\tools\...` path.
-2. **פרויקטים** tab → type a Hebrew project name → **צור**. The editor opens on
+1. **Tools** tab → **Check tools**. FFmpeg, FFprobe and Auto-Editor should each
+   show Available = Yes with a version and a `C:\tools\...` path.
+2. **Projects** tab → type a project name → **Create**. The editor opens on
    the right and the project appears in the list.
-3. Paste the full path of a real video (a path with spaces is a good test) →
-   **הוסף קובץ**. The filename, size and full path appear.
-4. Add a second and a third file. Reorder them with ↑ / ↓ and change the project
-   name. A `שינויים לא שמורים` badge appears.
-5. Press **שמור שינויים**. A green confirmation with the save time appears and
+3. Press **Upload folder…** and pick a folder holding a few real clips (a path
+   with spaces is a good test). The machine's folder dialog opens; choose the
+   folder and every video in it is added, ordered by name, with filename, size
+   and full path. Non-video files in the folder are reported as ignored.
+4. Reorder the clips with ↑ / ↓ and change the project name. An
+   `Unsaved changes` badge appears.
+5. Press **Save changes**. A green confirmation with the save time appears and
    the badge disappears.
 6. Stop both terminals (Ctrl+C) and start them again. Reopen the project: the
    name and the source order are exactly as saved.
 7. Rename one of the source files in Explorer, then reload the project. It is
-   marked `קובץ חסר`, the other sources are unaffected, and the project still
+   marked `File missing`, the other sources are unaffected, and the project still
    opens and saves. Rename the file back and reload to clear it.
-8. Paste a nonsense path such as `not\a\path.mp4` → a Hebrew error explains that
-   a full path is required. Clear the project name and press save → an error
+8. Press **Upload folder…** and dismiss the dialog → nothing changes. Choose the
+   same folder again → every clip is reported as already in the project and
+   nothing is duplicated. Clear the project name and press save → an error
    explains that the name cannot be empty, and nothing is written.
-9. Remove a source with **הסר** and save. The file still exists in Explorer.
+9. Remove a source with **Remove** and save. The file still exists in Explorer.
 
 ### Jobs and plans (milestone 0B)
 
-With a project open, scroll to **משימות רקע** and **תוכנית עריכה (AI)**:
+With a project open, scroll to **Background jobs** and **Editing plan (AI)**:
 
-10. **הרץ בדיקת כלים**. The job appears as בתור/פועלת and finishes as הסתיימה
+10. **Run tool check**. The job appears as Queued/Running and finishes as Finished
     with a tool table. While it runs, switching projects and editing the name
     still work.
-11. Press it again and immediately press **בטל**. Either the job is cancelled
-    outright (it was still queued) or it shows `התבקש ביטול` and then בוטלה.
+11. Press it again and immediately press **Cancel**. Either the job is cancelled
+    outright (it was still queued) or it shows `Cancellation requested` and then Cancelled.
     The status shown is always what actually happened.
-12. Press **הרץ שוב** on a finished job: a new job appears with the
-    `הרצה חוזרת` badge, and the original record stays as it was.
+12. Press **Run again** on a finished job: a new job appears with the
+    `Re-run` badge, and the original record stays as it was.
 13. Restart the backend (Ctrl+C, then the uvicorn command again) and reload the
     page. Finished jobs and their results are still listed. Anything that was
-    mid-run is now נקטעה with an explanation.
-14. In the AI panel, confirm the badge says **מצב הדגמה (ללא AI)** when no key
-    is configured. Type `בדוק אילו כלי עיבוד מותקנים` → **בקש תוכנית**. A
+    mid-run is now Interrupted with an explanation.
+14. In the AI panel, confirm the badge says **Demo mode (no AI)** when no key
+    is configured. Type `check which processing tools are installed` →
+    **Ask for a plan**. A
     generation job runs, and the plan appears below with a summary and one
     action.
-15. Type instead `תחתוך את כל השתיקות ותוסיף כתוביות`. The job succeeds with a
+15. Type instead `trim all the silences and add subtitles`. The job succeeds with a
     plain explanation that no implemented capability covers it — and no plan is
     created.
 16. Open the plan, untick a tool, edit the summary, and press
-    **שמור כגרסה חדשה**. Revision 2 appears, needs approval again, and
-    **גרסה 1** is still openable and unchanged.
-17. Press **אשר תוכנית**, then **הרץ תוכנית מאושרת**. An execution job runs and
+    **Save as a new revision**. Revision 2 appears, needs approval again, and
+    **Revision 1** is still openable and unchanged.
+17. Press **Approve plan**, then **Run approved plan**. An execution job runs and
     reports the tool table for exactly the tools you left ticked.
 18. Add another source file to the project. The plan is immediately marked
-    `לא מעודכנת`, and both approval and execution are refused with a reason.
+    `Out of date`, and both approval and execution are refused with a reason.
     Asking for a new plan produces a current one.
 
 ### Cutting (milestone 1A)
@@ -414,28 +427,29 @@ With a project open, scroll to **משימות רקע** and **תוכנית ערי
 These are the checks that need a person: the automated suite proves the
 mechanism, but only you can tell whether a cut *sounds* right.
 
-19. In **חיתוך שתיקות**, tick one real talking-head take, leave the defaults,
-    choose **גם קטעים נפרדים וגם סרטון מאוחד**, and press **הרץ חיתוך**. The
-    job appears in **משימות רקע** with a moving percentage naming the clip it
+19. In **Silence cutting**, tick one real talking-head take, leave the defaults,
+    choose **Both separate clips and a combined video**, and press **Run cut**.
+    The job appears in **Background jobs** with a moving percentage naming the clip it
     is on, and the interface stays usable while it works.
 20. When it finishes, play the trimmed clip in place. **Listen for the things
     only you can judge:** words clipped at the start of a phrase (raise
-    *שוליים לפני דיבור*), sentences that end too abruptly (raise
-    *שוליים אחרי דיבור*), breaths or filler left in (raise *סף אודיו*), and
-    speech wrongly removed (lower *סף אודיו* or *דיבור מינימלי לשמירה*).
+    *Margin before speech*), sentences that end too abruptly (raise
+    *Margin after speech*), breaths or filler left in (raise *Audio threshold*),
+    and speech wrongly removed (lower *Audio threshold* or
+    *Minimum speech to keep*).
 21. Drag the player's scrubber to the middle of the clip. It should seek
-    instantly. Press **הורד** and confirm the file opens in your usual player.
+    instantly. Press **Download** and confirm the file opens in your usual player.
 22. Compare the original and output durations shown next to the clip against
     your own sense of how much dead air the take had.
 23. Tick a second take, set the order with ↑ / ↓, and run again. The combined
     video must join them in **that** order, not the project's order.
-24. Press **הרץ חיתוך** on a long take and then **בטל** in **משימות רקע** while
+24. Press **Run cut** on a long take and then **Cancel** in **Background jobs** while
     it is running. It must stop within a second or two; check Task Manager to
     confirm no `ffmpeg.exe` or `auto-editor.exe` is still burning CPU. The run
-    is listed as בוטלה and offers no combined video.
-25. Press **הרץ שוב** on the cancelled job. A *new* run appears; the cancelled
+    is listed as Cancelled and offers no combined video.
+25. Press **Run again** on the cancelled job. A *new* run appears; the cancelled
     one is still listed, unchanged.
-26. Change a setting, press **שמור הגדרות**, restart both terminals, and reopen
+26. Change a setting, press **Save settings**, restart both terminals, and reopen
     the project. The selection, the order, the five values, the output mode and
     every previous run with its players are all still there.
 27. Rename a source file in Explorer and try to run. The error names the file

@@ -54,7 +54,7 @@ def blocking_job_type():
     release = threading.Event()
 
     def handler(context):
-        context.progress("עובד…", percent=25.0)
+        context.progress("Working…", percent=25.0)
         started.set()
         for _ in range(200):
             context.raise_if_cancelled()
@@ -63,7 +63,7 @@ def blocking_job_type():
         context.raise_if_cancelled()
         return {"done": True}
 
-    jobs.register_job_type("test_blocking", "משימת בדיקה", handler, lambda p, raw: raw or {})
+    jobs.register_job_type("test_blocking", "Test job", handler, lambda p, raw: raw or {})
     try:
         yield started, release
     finally:
@@ -130,7 +130,7 @@ def test_the_interface_stays_usable_while_a_job_runs(client, project, blocking_j
 
     running = client.get(f"/projects/{project['id']}/jobs/{job['id']}").json()
     assert running["status"] == jobs.RUNNING
-    assert running["progress_message"] == "עובד…"
+    assert running["progress_message"] == "Working…"
     assert running["progress_percent"] == 25.0
 
     release.set()
@@ -201,7 +201,7 @@ def test_unfinished_jobs_become_interrupted_on_restart(client, project, workspac
 
     assert recovered["status"] == jobs.INTERRUPTED
     assert recovered["finished_at"]
-    assert "הופעל מחדש" in recovered["error"]
+    assert "restarted" in recovered["error"]
 
 
 def test_an_interrupted_job_is_not_replayed(client, project, workspace):
@@ -240,7 +240,7 @@ def test_a_running_job_is_cancelled_only_once_it_actually_stops(
     asked = response.json()
     assert asked["status"] == jobs.RUNNING
     assert asked["cancel_requested"] is True
-    assert "ביטול" in asked["progress_message"]
+    assert "Cancellation" in asked["progress_message"]
 
     cancelled = wait_for_status(client, project["id"], job["id"], {jobs.CANCELLED})
     assert cancelled["finished_at"]
@@ -283,16 +283,16 @@ def test_cancelling_a_finished_job_is_rejected(client, project):
 
 def test_a_failing_handler_is_reported_as_failed_with_a_message(client, project):
     def handler(context):
-        raise jobs.JobFailed("הכלי לא נמצא.")
+        raise jobs.JobFailed("Tool not found.")
 
-    jobs.register_job_type("test_failing", "משימה נכשלת", handler, lambda p, raw: {})
+    jobs.register_job_type("test_failing", "Failing job", handler, lambda p, raw: {})
     try:
         job = submit(client, project["id"], "test_failing")
         failed = wait_for_status(client, project["id"], job["id"], {jobs.FAILED})
     finally:
         jobs.JOB_TYPES.pop("test_failing", None)
 
-    assert failed["error"] == "הכלי לא נמצא."
+    assert failed["error"] == "Tool not found."
     assert failed["result"] is None
     assert failed["finished_at"]
 

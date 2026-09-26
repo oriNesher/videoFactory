@@ -25,7 +25,7 @@ from .config import API_KEY_ENV_VAR, get_llm_settings
 MOCK = "mock"
 ANTHROPIC = "anthropic"
 
-MOCK_LABEL = "מצב הדגמה (ללא AI)"
+MOCK_LABEL = "Demo mode (no AI)"
 ANTHROPIC_LABEL = "Anthropic Claude"
 
 MAX_OUTPUT_TOKENS = 8000
@@ -37,16 +37,16 @@ MAX_RETRIES = 1
 # What a real request sends to the provider. Shown in the README and returned by
 # the status endpoint so it is never a surprise.
 DATA_SENT_TO_PROVIDER = [
-    "ההנחיה שכתבת",
-    "קטלוג היכולות של האפליקציה",
-    "קטלוג המשאבים של הפרויקט: מזהים, שמות קבצים, זמינות וגודל",
-    "סכמת התשובה הנדרשת",
+    "the instruction you wrote",
+    "the application's capability catalog",
+    "the project's resource catalog: ids, file names, availability and size",
+    "the required response schema",
 ]
 
 DATA_NOT_SENT_TO_PROVIDER = [
-    "קובצי וידאו, אודיו או תמונות",
-    "נתיבים מלאים במחשב",
-    "שם הפרויקט או תוכן אחר מהמחשב",
+    "video, audio or image files",
+    "full paths on this machine",
+    "the project name or other content from this machine",
 ]
 
 
@@ -70,7 +70,7 @@ RESPONSE_SCHEMA = {
         },
         "summary": {
             "type": "string",
-            "description": "Hebrew, one short paragraph describing the plan",
+            "description": "one short paragraph describing the plan",
         },
         "actions": {
             "type": "array",
@@ -81,20 +81,20 @@ RESPONSE_SCHEMA = {
                     "capability_id": {"type": "string"},
                     "resource_ids": {"type": "array", "items": {"type": "string"}},
                     "parameters": {"type": "object"},
-                    "note": {"type": "string", "description": "Hebrew, why this action"},
+                    "note": {"type": "string", "description": "why this action"},
                 },
                 "required": ["id", "capability_id", "parameters"],
             },
         },
         "explanation": {
             "type": "string",
-            "description": "Hebrew, required when supported is false",
+            "description": "required when supported is false",
         },
     },
     "required": ["supported"],
 }
 
-SYSTEM_PROMPT = """You plan work for Video Factory, a local Hebrew-language video \
+SYSTEM_PROMPT = """You plan work for Video Factory, a local video \
 production app. You do not execute anything: you return a proposal that the \
 backend validates, the user reviews and edits, and the user alone approves.
 
@@ -109,10 +109,10 @@ There is no field for one, and a plan that contains one is rejected.
 - Filenames do NOT reveal what is in a video. Do not infer content, speech or \
 structure from a filename.
 - If what the user asked for cannot be done with the registered capabilities, \
-return {"supported": false, "explanation": "..."} explaining in Hebrew what is \
+return {"supported": false, "explanation": "..."} explaining what is \
 missing. Never invent actions to look helpful.
 
-Write "summary", "note" and "explanation" in Hebrew.
+Write "summary", "note" and "explanation" in English.
 Respond with a single JSON object matching the response schema. No markdown, no \
 code fences, no text before or after the JSON."""
 
@@ -129,7 +129,7 @@ def build_request(instruction: str, capability_catalog: dict, resource_catalog: 
 
 def _user_message(request: dict) -> str:
     return (
-        "User instruction (Hebrew):\n%s\n\n"
+        "User instruction:\n%s\n\n"
         "Capability catalog:\n%s\n\n"
         "Project resource catalog:\n%s\n\n"
         "Required response schema:\n%s"
@@ -147,7 +147,7 @@ def _extract_json(text: str) -> dict:
     candidate = text.strip()
 
     if not candidate:
-        raise ProviderError("המודל החזיר תשובה ריקה.")
+        raise ProviderError("The model returned an empty response.")
 
     try:
         parsed = json.loads(candidate)
@@ -155,14 +155,14 @@ def _extract_json(text: str) -> dict:
         start = candidate.find("{")
         end = candidate.rfind("}")
         if start == -1 or end <= start:
-            raise ProviderError("תשובת המודל אינה JSON תקין.") from None
+            raise ProviderError("The model's response is not valid JSON.") from None
         try:
             parsed = json.loads(candidate[start : end + 1])
         except ValueError:
-            raise ProviderError("תשובת המודל אינה JSON תקין.") from None
+            raise ProviderError("The model's response is not valid JSON.") from None
 
     if not isinstance(parsed, dict):
-        raise ProviderError("תשובת המודל אינה במבנה הצפוי.")
+        raise ProviderError("The model's response is not in the expected shape.")
 
     return parsed
 
@@ -183,14 +183,9 @@ class MockProvider:
     is_mock = True
 
     TOOL_KEYWORDS = (
-        "כלי",
-        "כלים",
-        "בדיק",
-        "בדוק",
-        "גרס",
-        "אבחון",
-        "התקנ",
-        "זמין",
+        "install",
+        "available",
+        "path",
         "ffmpeg",
         "ffprobe",
         "auto",
@@ -229,10 +224,11 @@ class MockProvider:
             return {
                 "supported": False,
                 "explanation": (
-                    "מצב הדגמה: הבקשה אינה מתאימה לאף יכולת שממומשת כרגע "
-                    "באפליקציה. היכולת היחידה שקיימת היא בדיקת כלי העיבוד "
-                    "המותקנים. יכולות עריכה (חיתוך, כתוביות, זומים, B-roll, "
-                    "אודיו) עדיין לא נבנו."
+                    "Demo mode: the request does not match any capability implemented "
+                    "in the application yet. The only one that exists is checking "
+                    "the installed processing tools. Editing capabilities "
+                    "(cutting, subtitles, zooms, B-roll, audio) have not been "
+                    "built yet."
                 ),
             }
 
@@ -250,8 +246,9 @@ class MockProvider:
         return {
             "supported": True,
             "summary": (
-                "מצב הדגמה: תוכנית אבחון הבודקת שהכלים החיצוניים (%s) מותקנים, "
-                "נגישים דרך ה־PATH ומדווחים גרסה. התוכנית אינה עורכת וידאו."
+                "Demo mode: a diagnostic plan that checks the external tools (%s) are "
+                "installed, reachable on PATH and reporting a version. The plan "
+                "does not edit video."
                 % ", ".join(capabilities.tool_label(name) for name in tools)
             ),
             "actions": [
@@ -260,7 +257,7 @@ class MockProvider:
                     "capability_id": capabilities.TOOL_CHECK,
                     "resource_ids": [],
                     "parameters": {"tools": tools},
-                    "note": "בדיקת זמינות וגרסה של כלי העיבוד.",
+                    "note": "Check the processing tools' availability and version.",
                 }
             ],
         }
@@ -291,8 +288,8 @@ class AnthropicProvider:
             import anthropic
         except ImportError as error:
             raise ProviderError(
-                "חבילת anthropic אינה מותקנת. התקן אותה עם "
-                "pip install -r requirements.txt כדי להשתמש בספק אמיתי."
+                "The anthropic package is not installed. Install it with "
+                "pip install -r requirements.txt to use a real provider."
             ) from error
 
         client = anthropic.Anthropic(
@@ -311,27 +308,27 @@ class AnthropicProvider:
             )
         except anthropic.APITimeoutError as error:
             raise ProviderError(
-                "הפנייה לספק ה־AI חרגה מהזמן המוקצב (%.0f שניות)." % self._timeout
+                "The AI provider call exceeded its time budget (%.0f seconds)." % self._timeout
             ) from error
         except anthropic.AuthenticationError as error:
             raise ProviderError(
-                "מפתח ה־API של הספק אינו תקף. בדוק את ANTHROPIC_API_KEY."
+                "The provider's API key is not valid. Check ANTHROPIC_API_KEY."
             ) from error
         except anthropic.RateLimitError as error:
             raise ProviderError(
-                "הספק החזיר חריגה ממכסת הבקשות. נסה שוב מאוחר יותר."
+                "The provider returned a rate-limit error. Try again later."
             ) from error
         except anthropic.APIStatusError as error:
             raise ProviderError(
-                "הספק החזיר שגיאה (קוד %s)." % getattr(error, "status_code", "לא ידוע")
+                "The provider returned an error (status %s)." % getattr(error, "status_code", "unknown")
             ) from error
         except anthropic.APIConnectionError as error:
-            raise ProviderError("אין חיבור לספק ה־AI.") from error
+            raise ProviderError("There is no connection to the AI provider.") from error
         except Exception as error:  # noqa: BLE001 - bounded, never leaks the key
-            raise ProviderError("הפנייה לספק ה־AI נכשלה: %s" % type(error).__name__) from error
+            raise ProviderError("The AI provider call failed: %s" % type(error).__name__) from error
 
         if getattr(response, "stop_reason", None) == "refusal":
-            raise ProviderError("הספק סירב לענות על הבקשה הזו.")
+            raise ProviderError("The provider declined to answer this request.")
 
         text = "".join(
             block.text for block in response.content if getattr(block, "type", "") == "text"
@@ -354,14 +351,14 @@ def get_provider() -> Any:
         api_key = os.environ.get(API_KEY_ENV_VAR, "").strip()
         if not api_key:
             raise ProviderError(
-                "הספק מוגדר כ־anthropic אך לא הוגדר מפתח %s. אפשר להגדיר מפתח "
-                "או לעבוד במצב הדגמה (VIDEO_FACTORY_LLM_PROVIDER=mock)."
+                "The provider is set to anthropic but no %s key is configured. Set a "
+                "key, or work in demo mode (VIDEO_FACTORY_LLM_PROVIDER=mock)."
                 % API_KEY_ENV_VAR
             )
         return AnthropicProvider(settings["model"], api_key, settings["timeout_seconds"])
 
     raise ProviderError(
-        'ספק AI לא מוכר: "%s". ערכים נתמכים: mock, anthropic.' % name
+        'Unknown AI provider: "%s". Supported values: mock, anthropic.' % name
     )
 
 
@@ -378,8 +375,8 @@ def provider_status() -> dict:
             "is_mock": True,
             "ready": True,
             "message": (
-                "מצב הדגמה: התוכניות נוצרות על ידי כללים קבועים במחשב הזה. "
-                "אלו אינן תשובות של מודל AI ושום מידע אינו נשלח לאינטרנט."
+                "Demo mode: plans are produced by fixed rules on this machine. These "
+                "are not answers from an AI model, and nothing is sent to the internet."
             ),
             "data_sent": [],
             "data_not_sent": DATA_SENT_TO_PROVIDER + DATA_NOT_SENT_TO_PROVIDER,
@@ -394,10 +391,10 @@ def provider_status() -> dict:
             "is_mock": False,
             "ready": ready,
             "message": (
-                "ספק אמיתי מוגדר (%s). בקשה ליצירת תוכנית תשלח טקסט ומטא־דאטה "
-                "לשרתי Anthropic." % settings["model"]
+                "A real provider is configured (%s). Asking for a plan sends text and "
+                "metadata to Anthropic's servers." % settings["model"]
                 if ready
-                else "הספק מוגדר כ־anthropic אך לא הוגדר ANTHROPIC_API_KEY בסביבת השרת."
+                else "The provider is set to anthropic but ANTHROPIC_API_KEY is not set in the server environment."
             ),
             "data_sent": DATA_SENT_TO_PROVIDER,
             "data_not_sent": DATA_NOT_SENT_TO_PROVIDER,
@@ -409,7 +406,7 @@ def provider_status() -> dict:
         "model": settings["model"],
         "is_mock": False,
         "ready": False,
-        "message": 'ספק AI לא מוכר: "%s". ערכים נתמכים: mock, anthropic.' % name,
+        "message": 'Unknown AI provider: "%s". Supported values: mock, anthropic.' % name,
         "data_sent": [],
         "data_not_sent": DATA_SENT_TO_PROVIDER + DATA_NOT_SENT_TO_PROVIDER,
     }

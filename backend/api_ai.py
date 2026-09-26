@@ -27,7 +27,7 @@ def _revision_number(raw: str) -> int:
     try:
         return plans.validate_revision_number(int(raw))
     except (TypeError, ValueError):
-        raise plans.PlanNotFound("מספר גרסה לא חוקי.") from None
+        raise plans.PlanNotFound("Invalid revision number.") from None
 
 
 # --- catalogs and provider --------------------------------------------------

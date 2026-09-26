@@ -41,7 +41,7 @@ PLAN_EXECUTION_JOB = "plan_execution"
 def validate_tool_check_input(project_id: str, raw: Any) -> dict:
     """Same parameter rules as the capability, so both paths agree."""
     capability = capabilities.CAPABILITIES[capabilities.TOOL_CHECK]
-    parameters = capabilities.validate_parameters(capability, raw or {}, "בדיקת כלים")
+    parameters = capabilities.validate_parameters(capability, raw or {}, "Tool check")
     return {"tools": parameters["tools"]}
 
 
@@ -54,7 +54,7 @@ def _check_tools(context: jobs.JobContext | None, names: list[str]) -> dict:
         if context is not None:
             context.raise_if_cancelled()
             context.progress(
-                "בודק %s (%d מתוך %d)…" % (capabilities.tool_label(name), index + 1, total),
+                "Checking %s (%d of %d)…" % (capabilities.tool_label(name), index + 1, total),
                 percent=100.0 * index / total,
             )
 
@@ -66,7 +66,7 @@ def _check_tools(context: jobs.JobContext | None, names: list[str]) -> dict:
         "tools": results,
         "available_count": available,
         "checked_count": total,
-        "summary": "%d מתוך %d כלים זמינים ופועלים." % (available, total),
+        "summary": "%d of %d tools are available and working." % (available, total),
     }
 
 
@@ -97,7 +97,7 @@ def run_cut_media(context: jobs.JobContext) -> dict:
 
 def validate_plan_generation_input(project_id: str, raw: Any) -> dict:
     if not isinstance(raw, dict):
-        raise plans.PlanError("בקשת יצירת התוכנית אינה תקינה.")
+        raise plans.PlanError("The plan request is invalid.")
 
     instruction = plans.validate_instruction(raw.get("instruction"))
     status = llm.provider_status()
@@ -116,7 +116,7 @@ def run_plan_generation(context: jobs.JobContext) -> dict:
     project = storage.read_project(context.project_id)
 
     context.raise_if_cancelled()
-    context.progress("מכין את קטלוג היכולות והמשאבים…")
+    context.progress("Preparing the capability and resource catalogs…")
 
     capability_catalog = capabilities.catalog()
     resource_catalog = resources.build_catalog(project)
@@ -130,7 +130,7 @@ def run_plan_generation(context: jobs.JobContext) -> dict:
 
     context.raise_if_cancelled()
     context.progress(
-        "פונה ל%s…" % ("מנוע ההדגמה" if provider.is_mock else provider.label)
+        "Asking %s…" % ("the demo engine" if provider.is_mock else provider.label)
     )
 
     try:
@@ -139,16 +139,16 @@ def run_plan_generation(context: jobs.JobContext) -> dict:
         raise jobs.JobFailed(error.message) from error
 
     context.raise_if_cancelled()
-    context.progress("בודק את ההצעה מול קטלוג היכולות…")
+    context.progress("Checking the proposal against the capability catalog…")
 
     if not isinstance(proposal, dict):
-        raise jobs.JobFailed("תשובת הספק אינה במבנה הצפוי.")
+        raise jobs.JobFailed("The provider's response is not in the expected shape.")
 
     if not proposal.get("supported", False):
         explanation = proposal.get("explanation")
         if not isinstance(explanation, str) or not explanation.strip():
             explanation = (
-                "הבקשה אינה נתמכת על ידי היכולות שממומשות כרגע, ולא ניתן הסבר מפורט."
+                "The request is not supported by the capabilities implemented so far, and no detailed explanation was given."
             )
         # A refusal is a successful job: the user gets a real answer, and no
         # plan is invented to fill the gap.
@@ -169,7 +169,7 @@ def run_plan_generation(context: jobs.JobContext) -> dict:
         )
     except storage.ProjectError as error:
         raise jobs.JobFailed(
-            "ההצעה של הספק נדחתה באימות: %s" % error.message
+            "The provider's proposal was rejected in validation: %s" % error.message
         ) from error
 
     return {
@@ -187,7 +187,7 @@ def run_plan_generation(context: jobs.JobContext) -> dict:
 
 def validate_plan_execution_input(project_id: str, raw: Any) -> dict:
     if not isinstance(raw, dict):
-        raise plans.PlanError("בקשת ההרצה אינה תקינה.")
+        raise plans.PlanError("The run request is invalid.")
 
     project = storage.read_project(project_id)
     plan_id = plans.validate_plan_id(raw.get("plan_id"))
@@ -241,7 +241,7 @@ def run_plan_execution(context: jobs.JobContext) -> dict:
     plan_id = context.input["plan_id"]
     revision = context.input["revision"]
 
-    context.progress("בודק שהתוכנית עדיין ניתנת להרצה…")
+    context.progress("Checking that the plan is still runnable…")
 
     # Re-checked here, not only at submission: the project or the plan may have
     # changed while the job waited in the queue.
@@ -256,14 +256,14 @@ def run_plan_execution(context: jobs.JobContext) -> dict:
     for index, action in enumerate(actions):
         context.raise_if_cancelled()
         context.progress(
-            "מריץ פעולה %d מתוך %d…" % (index + 1, len(actions)),
+            "Running action %d of %d…" % (index + 1, len(actions)),
             percent=100.0 * index / len(actions),
         )
 
         executor = EXECUTORS.get(action["capability_id"])
         if executor is None:
             raise jobs.JobFailed(
-                'אין מימוש הרצה ליכולת "%s".' % action["capability_id"]
+                'Capability "%s" has no run implementation.' % action["capability_id"]
             )
 
         outcomes.append(
@@ -279,7 +279,7 @@ def run_plan_execution(context: jobs.JobContext) -> dict:
         "plan_id": plan_id,
         "revision": revision,
         "action_results": outcomes,
-        "summary": "בוצעו %d פעולות." % len(outcomes),
+        "summary": "%d actions completed." % len(outcomes),
     }
 
 
@@ -287,28 +287,28 @@ def run_plan_execution(context: jobs.JobContext) -> dict:
 
 jobs.register_job_type(
     TOOL_CHECK_JOB,
-    "בדיקת כלי עיבוד",
+    "Processing tool check",
     run_tool_check,
     validate_tool_check_input,
 )
 
 jobs.register_job_type(
     CUT_MEDIA_JOB,
-    "חיתוך שתיקות",
+    "Silence cutting",
     run_cut_media,
     validate_cut_media_input,
 )
 
 jobs.register_job_type(
     PLAN_GENERATION_JOB,
-    "יצירת תוכנית עריכה",
+    "Generate editing plan",
     run_plan_generation,
     validate_plan_generation_input,
 )
 
 jobs.register_job_type(
     PLAN_EXECUTION_JOB,
-    "הרצת תוכנית מאושרת",
+    "Run approved plan",
     run_plan_execution,
     validate_plan_execution_input,
 )

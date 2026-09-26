@@ -2,9 +2,14 @@
 
 from fastapi import APIRouter, HTTPException
 
-from . import storage
+from . import folders, storage
 from .config import get_workspace_root
-from .models import AddSourceRequest, CreateProjectRequest, SaveProjectRequest
+from .models import (
+    AddSourceRequest,
+    AddSourceDirectoryRequest,
+    CreateProjectRequest,
+    SaveProjectRequest,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -59,3 +64,23 @@ def add_source(project_id: str, request: AddSourceRequest):
         raise _fail(error) from error
 
     return storage.describe_project(project)
+
+
+@router.post("/{project_id}/sources/directory", status_code=201)
+def add_source_directory(project_id: str, request: AddSourceDirectoryRequest):
+    """Add every video file in a folder, ordered by file name.
+
+    With no `path`, the backend opens the machine's own folder dialog first —
+    the browser cannot tell a web page where a folder really lives on disk.
+    """
+    try:
+        path = request.path
+        if path is None:
+            chosen = folders.choose_directory()
+            if chosen["cancelled"]:
+                return {"cancelled": True}
+            path = chosen["path"]
+
+        return {"cancelled": False, **folders.add_directory(project_id, path)}
+    except storage.ProjectError as error:
+        raise _fail(error) from error

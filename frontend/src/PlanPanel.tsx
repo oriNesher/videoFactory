@@ -27,7 +27,7 @@ type Message = { kind: 'ok' | 'error'; text: string } | null
 function formatDate(value: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('he-IL')
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-US')
 }
 
 function sameActions(a: PlanAction[], b: PlanAction[]): boolean {
@@ -140,6 +140,122 @@ function ParameterField({
   )
 }
 
+/** A parameter and its value on one read-only line, e.g. `audio_threshold 0.04`. */
+function summariseParameters(
+  capability: Capability,
+  action: PlanAction,
+): string {
+  return Object.entries(capability.parameters)
+    .map(([name, spec]) => {
+      const value = action.parameters[name] ?? spec.default
+      return `${name} ${Array.isArray(value) ? value.join('+') : String(value)}`
+    })
+    .join(' · ')
+}
+
+/**
+ * One action of a plan.
+ *
+ * The parameters start collapsed behind a read-only summary, the same way a
+ * past cut run shows the settings it used. A capability's settings are edited
+ * in one place — its own panel — and a plan that happens to reuse the same
+ * five numbers does not stamp a second copy of that form onto the page.
+ */
+function ActionCard({
+  action,
+  capability,
+  kindLabel,
+  resourceName,
+  busy,
+  onChange,
+  onRemove,
+}: {
+  action: PlanAction
+  capability: Capability | undefined
+  kindLabel: Record<string, string>
+  resourceName: (id: string) => string
+  busy: boolean
+  onChange: (changes: Partial<PlanAction>) => void
+  onRemove: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const parameterCount = capability
+    ? Object.keys(capability.parameters).length
+    : 0
+
+  return (
+    <li>
+      <div className="job-header">
+        <span className="job-title">
+          <span className="mono small">{action.id}</span>
+          {capability?.title ?? action.capability_id}
+          {capability ? (
+            <span className="badge">
+              {kindLabel[capability.kind] ?? capability.kind}
+            </span>
+          ) : (
+            <span className="badge bad">Unsupported capability</span>
+          )}
+        </span>
+        <span className="row">
+          {parameterCount > 0 && (
+            <button type="button" onClick={() => setOpen(!open)}>
+              {open ? 'Hide settings' : `Edit settings (${parameterCount})`}
+            </button>
+          )}
+          <button type="button" onClick={onRemove} disabled={busy}>
+            Remove action
+          </button>
+        </span>
+      </div>
+
+      {capability ? (
+        <p className="hint small">{capability.purpose}</p>
+      ) : (
+        <p className="message error">
+          Capability "{action.capability_id}" does not exist in this application,
+          so the plan cannot be run. Remove the action or create a new plan.
+        </p>
+      )}
+
+      {capability && parameterCount > 0 && !open && (
+        <p className="hint small mono">
+          {summariseParameters(capability, action)}
+        </p>
+      )}
+
+      {capability &&
+        open &&
+        Object.entries(capability.parameters).map(([name, spec]) => (
+          <ParameterField
+            key={name}
+            name={name}
+            spec={spec}
+            value={action.parameters[name]}
+            onChange={(next) =>
+              onChange({ parameters: { ...action.parameters, [name]: next } })
+            }
+          />
+        ))}
+
+      {action.resource_ids.length > 0 && (
+        <p className="hint small">
+          Footage: {action.resource_ids.map(resourceName).join(', ')}
+        </p>
+      )}
+
+      <label className="field wide">
+        <span>Note</span>
+        <input
+          type="text"
+          value={action.note}
+          onChange={(event) => onChange({ note: event.target.value })}
+        />
+      </label>
+    </li>
+  )
+}
+
 type Props = {
   project: Project
   refreshToken: number
@@ -210,7 +326,7 @@ export default function PlanPanel({
       } catch (caught) {
         setMessage({
           kind: 'error',
-          text: caught instanceof Error ? caught.message : 'טעינת התוכנית נכשלה.',
+          text: caught instanceof Error ? caught.message : 'Loading the plan failed.',
         })
       }
     },
@@ -239,7 +355,7 @@ export default function PlanPanel({
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'טעינת התוכניות נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Loading the plans failed.',
       })
     }
   }, [openRevision, projectId])
@@ -256,13 +372,13 @@ export default function PlanPanel({
       await generatePlan(projectId, instruction)
       setMessage({
         kind: 'ok',
-        text: 'הבקשה נשלחה כמשימת רקע. המעקב והתוצאה בלוח המשימות שמעל.',
+        text: 'The request was queued as a background job. Progress and result are in the jobs panel above.',
       })
       onJobSubmitted()
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'יצירת התוכנית נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Generating the plan failed.',
       })
     } finally {
       setBusy(false)
@@ -282,13 +398,13 @@ export default function PlanPanel({
       adopt(saved)
       setMessage({
         kind: 'ok',
-        text: `נשמרה גרסה ${saved.revision}. הגרסה הקודמת נשמרה כפי שהייתה, והגרסה החדשה ממתינה לאישור.`,
+        text: `Saved revision ${saved.revision}. The previous revision is kept as it was, and the new one is waiting for approval.`,
       })
       await refresh()
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'שמירת הגרסה נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Saving the revision failed.',
       })
     } finally {
       setBusy(false)
@@ -300,12 +416,12 @@ export default function PlanPanel({
     setBusy(true)
     try {
       adopt(await approvePlanRevision(projectId, plan.plan_id, plan.revision))
-      setMessage({ kind: 'ok', text: 'התוכנית אושרה ואפשר להריץ אותה.' })
+      setMessage({ kind: 'ok', text: 'The plan is approved and can be run.' })
       await refresh()
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'האישור נכשל.',
+        text: caught instanceof Error ? caught.message : 'Approval failed.',
       })
     } finally {
       setBusy(false)
@@ -319,13 +435,13 @@ export default function PlanPanel({
       await executePlanRevision(projectId, plan.plan_id, plan.revision)
       setMessage({
         kind: 'ok',
-        text: 'ההרצה נוספה לתור המשימות. התוצאה תופיע בלוח המשימות.',
+        text: 'The run was added to the job queue. The result will appear in the jobs panel.',
       })
       onJobSubmitted()
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'ההרצה נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Running failed.',
       })
     } finally {
       setBusy(false)
@@ -351,7 +467,7 @@ export default function PlanPanel({
   return (
     <section className="panel subpanel">
       <div className="editor-header">
-        <h3>תוכנית עריכה (AI)</h3>
+        <h3>Editing plan (AI)</h3>
         {llm && (
           <span className={llm.is_mock ? 'badge warn' : 'badge ok'}>
             {llm.is_mock ? llm.label : `${llm.label} · ${llm.model}`}
@@ -362,7 +478,7 @@ export default function PlanPanel({
       {llm && <p className="hint small">{llm.message}</p>}
       {llm && !llm.is_mock && llm.ready && (
         <p className="hint small">
-          נשלח לספק: {llm.data_sent.join(', ')}. לא נשלח:{' '}
+          Sent to the provider: {llm.data_sent.join(', ')}. Not sent:{' '}
           {llm.data_not_sent.join(', ')}.
         </p>
       )}
@@ -371,11 +487,11 @@ export default function PlanPanel({
       )}
 
       <form className="field" onSubmit={handleGenerate}>
-        <span>מה צריך לעשות בסרטון?</span>
+        <span>What needs doing in this video?</span>
         <textarea
           rows={3}
           value={instruction}
-          placeholder="לדוגמה: בדוק שכל כלי העיבוד מותקנים ותקינים"
+          placeholder="For example: check that all the processing tools are installed and working"
           onChange={(event) => setInstruction(event.target.value)}
         />
         <div className="row">
@@ -384,15 +500,15 @@ export default function PlanPanel({
             className="primary"
             disabled={busy || !instruction.trim() || (llm ? !llm.ready : false)}
           >
-            בקש תוכנית
+            Ask for a plan
           </button>
         </div>
       </form>
 
       {catalog && (
         <p className="hint small">
-          יכולות זמינות כרגע: {catalog.capabilities.map((c) => c.title).join(', ')}.
-          עדיין לא נתמך: {catalog.not_yet_supported.join(', ')}.
+          Capabilities available now: {catalog.capabilities.map((c) => c.title).join(', ')}.
+          Not supported yet: {catalog.not_yet_supported.join(', ')}.
         </p>
       )}
 
@@ -403,7 +519,7 @@ export default function PlanPanel({
       )}
 
       {plans.length === 0 && (
-        <p className="hint">אין עדיין תוכניות בפרויקט הזה.</p>
+        <p className="hint">No plans in this project yet.</p>
       )}
 
       {plans.length > 0 && (
@@ -420,18 +536,18 @@ export default function PlanPanel({
               >
                 <span className="entry-name">{entry.summary}</span>
                 <span className="small">
-                  גרסה {entry.revision} · {entry.action_count} פעולות · עודכנה{' '}
+                  revision {entry.revision} · {entry.action_count} actions · updated{' '}
                   {formatDate(entry.revised_at)}
                 </span>
                 <span className="row">
                   <span className={entry.approved ? 'badge ok' : 'badge'}>
-                    {entry.approved ? 'מאושרת' : 'הצעה'}
+                    {entry.approved ? 'Approved' : 'Proposal'}
                   </span>
                   {entry.outdated && (
-                    <span className="badge bad">לא מעודכנת</span>
+                    <span className="badge bad">Out of date</span>
                   )}
                   {entry.provider.is_mock && (
-                    <span className="badge warn">הדגמה</span>
+                    <span className="badge warn">Demo</span>
                   )}
                 </span>
               </button>
@@ -444,8 +560,8 @@ export default function PlanPanel({
         <div className="plan-detail">
           <div className="editor-header">
             <h3>
-              תוכנית · גרסה {plan.revision}
-              {dirty && <span className="badge warn">שינויים לא שמורים</span>}
+              Plan · revision {plan.revision}
+              {dirty && <span className="badge warn">Unsaved changes</span>}
             </h3>
             <div className="row">
               {plan.revisions.map((revision) => (
@@ -456,39 +572,39 @@ export default function PlanPanel({
                   onClick={() => void openRevision(plan.plan_id, revision)}
                   disabled={busy}
                 >
-                  גרסה {revision}
+                  Revision {revision}
                 </button>
               ))}
             </div>
           </div>
 
           <p className="hint small">
-            ההנחיה: {plan.instruction} · נוצרה על ידי{' '}
-            {plan.origin === 'ai' ? plan.provider.label : 'עריכה ידנית'} ·{' '}
+            Instruction: {plan.instruction} · created by{' '}
+            {plan.origin === 'ai' ? plan.provider.label : 'manual editing'} ·{' '}
             {formatDate(plan.revised_at)}
           </p>
 
           {plan.provider.is_mock && (
             <p className="message">
-              התוכנית הזו נוצרה במצב הדגמה על ידי כללים קבועים במחשב, ולא על ידי
-              מודל AI.
+              This plan was produced in demo mode by fixed rules on this machine,
+              not by an AI model.
             </p>
           )}
 
           {plan.outdated && (
             <p className="message error">
-              {plan.outdated_reason} יש ליצור תוכנית חדשה לפני אישור או הרצה.
+              {plan.outdated_reason} Create a new plan before approving or running.
             </p>
           )}
 
           {!plan.is_latest && (
             <p className="message">
-              זו אינה הגרסה האחרונה (הגרסה האחרונה היא {plan.latest_revision}).
+              This is not the latest revision (the latest is {plan.latest_revision}).
             </p>
           )}
 
           <label className="field wide">
-            <span>תקציר</span>
+            <span>Summary</span>
             <textarea
               rows={3}
               value={draftSummary}
@@ -496,82 +612,25 @@ export default function PlanPanel({
             />
           </label>
 
-          <h4>פעולות ({draftActions.length})</h4>
+          <h4>Actions ({draftActions.length})</h4>
 
           <ol className="plan-actions">
             {draftActions.map((action, index) => {
-              const capability = capabilityOf(action.capability_id)
               return (
-                <li key={action.id}>
-                  <div className="job-header">
-                    <span className="job-title">
-                      <span className="mono small">{action.id}</span>
-                      {capability?.title ?? action.capability_id}
-                      {capability ? (
-                        <span className="badge">
-                          {catalog?.kind_labels[capability.kind] ??
-                            capability.kind}
-                        </span>
-                      ) : (
-                        <span className="badge bad">יכולת לא נתמכת</span>
-                      )}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDraftActions(
-                          draftActions.filter((_, position) => position !== index),
-                        )
-                      }
-                      disabled={busy}
-                    >
-                      הסר פעולה
-                    </button>
-                  </div>
-
-                  {capability ? (
-                    <p className="hint small">{capability.purpose}</p>
-                  ) : (
-                    <p className="message error">
-                      היכולת "{action.capability_id}" אינה קיימת באפליקציה ולכן
-                      אי אפשר להריץ את התוכנית. יש להסיר את הפעולה או ליצור
-                      תוכנית חדשה.
-                    </p>
-                  )}
-
-                  {capability &&
-                    Object.entries(capability.parameters).map(([name, spec]) => (
-                      <ParameterField
-                        key={name}
-                        name={name}
-                        spec={spec}
-                        value={action.parameters[name]}
-                        onChange={(next) =>
-                          updateAction(index, {
-                            parameters: { ...action.parameters, [name]: next },
-                          })
-                        }
-                      />
-                    ))}
-
-                  {action.resource_ids.length > 0 && (
-                    <p className="hint small">
-                      חומרי גלם:{' '}
-                      {action.resource_ids.map(resourceName).join(', ')}
-                    </p>
-                  )}
-
-                  <label className="field wide">
-                    <span>הערה</span>
-                    <input
-                      type="text"
-                      value={action.note}
-                      onChange={(event) =>
-                        updateAction(index, { note: event.target.value })
-                      }
-                    />
-                  </label>
-                </li>
+                <ActionCard
+                  key={action.id}
+                  action={action}
+                  capability={capabilityOf(action.capability_id)}
+                  kindLabel={catalog?.kind_labels ?? {}}
+                  resourceName={resourceName}
+                  busy={busy}
+                  onChange={(changes) => updateAction(index, changes)}
+                  onRemove={() =>
+                    setDraftActions(
+                      draftActions.filter((_, position) => position !== index),
+                    )
+                  }
+                />
               )
             })}
           </ol>
@@ -582,14 +641,14 @@ export default function PlanPanel({
               onClick={() => void handleSaveRevision()}
               disabled={busy || !dirty}
             >
-              שמור כגרסה חדשה
+              Save as a new revision
             </button>
             <button
               type="button"
               onClick={() => plan && adopt(plan)}
               disabled={busy || !dirty}
             >
-              בטל שינויים
+              Discard changes
             </button>
             <button
               type="button"
@@ -599,7 +658,7 @@ export default function PlanPanel({
                 busy || dirty || plan.approved || plan.outdated || !plan.is_latest
               }
             >
-              {plan.approved ? 'מאושרת' : 'אשר תוכנית'}
+              {plan.approved ? 'Approved' : 'Approve plan'}
             </button>
             <button
               type="button"
@@ -607,20 +666,20 @@ export default function PlanPanel({
               onClick={() => void handleExecute()}
               disabled={busy || dirty || !plan.executable}
             >
-              הרץ תוכנית מאושרת
+              Run approved plan
             </button>
           </div>
 
           {dirty && (
             <p className="hint small">
-              יש לשמור את השינויים כגרסה חדשה לפני אישור או הרצה.
+              Save your changes as a new revision before approving or running.
             </p>
           )}
           {!dirty && plan.blocked_reason && (
             <p className="message">{plan.blocked_reason}</p>
           )}
           {plan.approved && (
-            <p className="hint small">אושרה ב־{formatDate(plan.approved_at)}.</p>
+            <p className="hint small">Approved on {formatDate(plan.approved_at)}.</p>
           )}
         </div>
       )}

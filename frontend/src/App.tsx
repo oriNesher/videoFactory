@@ -18,14 +18,14 @@ function App() {
             className={tab === 'projects' ? 'tab active' : 'tab'}
             onClick={() => setTab('projects')}
           >
-            פרויקטים
+            Projects
           </button>
           <button
             type="button"
             className={tab === 'tools' ? 'tab active' : 'tab'}
             onClick={() => setTab('tools')}
           >
-            כלים
+            Tools
           </button>
         </nav>
       </header>

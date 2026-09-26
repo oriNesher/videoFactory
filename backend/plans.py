@@ -97,13 +97,13 @@ def approval_file(project_id: str, plan_id: str, revision: int) -> Path:
 
 def validate_plan_id(raw_id: Any) -> str:
     if not isinstance(raw_id, str) or not _PLAN_ID_PATTERN.match(raw_id):
-        raise PlanNotFound("מזהה תוכנית לא חוקי.")
+        raise PlanNotFound("Invalid plan id.")
     return raw_id
 
 
 def validate_revision_number(raw: Any) -> int:
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1 or raw > MAX_REVISIONS:
-        raise PlanNotFound("מספר גרסה לא חוקי.")
+        raise PlanNotFound("Invalid revision number.")
     return raw
 
 
@@ -112,26 +112,26 @@ def validate_revision_number(raw: Any) -> int:
 
 def validate_instruction(raw: Any) -> str:
     if not isinstance(raw, str):
-        raise PlanError("ההנחיה חייבת להיות טקסט.")
+        raise PlanError("The instruction must be text.")
 
     text = unicodedata.normalize("NFC", raw).strip()
     if not text:
-        raise PlanError("יש לכתוב מה רוצים שהתוכנית תעשה.")
+        raise PlanError("Write what you want the plan to do.")
     if len(text) > MAX_INSTRUCTION_LENGTH:
-        raise PlanError("ההנחיה ארוכה מדי (עד %d תווים)." % MAX_INSTRUCTION_LENGTH)
+        raise PlanError("The instruction is too long (up to %d characters)." % MAX_INSTRUCTION_LENGTH)
 
     return text
 
 
 def validate_summary(raw: Any) -> str:
     if not isinstance(raw, str):
-        raise PlanError("תקציר התוכנית חייב להיות טקסט.")
+        raise PlanError("The plan summary must be text.")
 
     text = unicodedata.normalize("NFC", raw).strip()
     if not text:
-        raise PlanError("לתוכנית חייב להיות תקציר קריא.")
+        raise PlanError("The plan must have a readable summary.")
     if len(text) > MAX_SUMMARY_LENGTH:
-        raise PlanError("תקציר התוכנית ארוך מדי (עד %d תווים)." % MAX_SUMMARY_LENGTH)
+        raise PlanError("The plan summary is too long (up to %d characters)." % MAX_SUMMARY_LENGTH)
 
     return text
 
@@ -140,12 +140,12 @@ def _validate_note(raw: Any, action_label: str) -> str:
     if raw is None:
         return ""
     if not isinstance(raw, str):
-        raise PlanError("%s: ההסבר לפעולה חייב להיות טקסט." % action_label)
+        raise PlanError("%s: the action note must be text." % action_label)
 
     text = raw.strip()
     if len(text) > MAX_NOTE_LENGTH:
         raise PlanError(
-            "%s: ההסבר לפעולה ארוך מדי (עד %d תווים)." % (action_label, MAX_NOTE_LENGTH)
+            "%s: the action note is too long (up to %d characters)." % (action_label, MAX_NOTE_LENGTH)
         )
     return text
 
@@ -156,7 +156,7 @@ def _validate_resource_ids(
     if raw is None:
         raw = []
     if not isinstance(raw, list):
-        raise PlanError("%s: רשימת המשאבים אינה תקינה." % action_label)
+        raise PlanError("%s: the resource list is invalid." % action_label)
 
     known = {resource["id"]: resource for resource in catalog["resources"]}
     max_resources = capability.get("max_resources", 0)
@@ -165,30 +165,30 @@ def _validate_resource_ids(
     if len(raw) > max_resources:
         if max_resources == 0:
             raise PlanError(
-                "%s: היכולת הזו אינה פועלת על חומרי גלם, ולכן אי אפשר לשייך לה קבצים."
+                "%s: this capability does not operate on footage, so no files can be attached to it."
                 % action_label
             )
         raise PlanError(
-            "%s: היכולת הזו מקבלת עד %d משאבים." % (action_label, max_resources)
+            "%s: this capability accepts at most %d resources." % (action_label, max_resources)
         )
 
     validated: list[str] = []
     for entry in raw:
         if not isinstance(entry, str) or entry not in known:
             raise PlanError(
-                '%s: המשאב "%s" אינו קיים בפרויקט הזה.' % (action_label, entry)
+                '%s: resource "%s" does not exist in this project.' % (action_label, entry)
             )
         if entry in validated:
-            raise PlanError("%s: אותו משאב מופיע פעמיים." % action_label)
+            raise PlanError("%s: the same resource appears twice." % action_label)
 
         resource = known[entry]
         if accepted_types and resource["media_type"] not in accepted_types:
             raise PlanError(
-                "%s: סוג המשאב אינו נתמך על ידי היכולת הזו." % action_label
+                "%s: this capability does not support that resource type." % action_label
             )
         if not resource["available"]:
             raise PlanError(
-                '%s: הקובץ "%s" אינו נמצא כרגע במיקומו, ולכן אי אפשר להשתמש בו.'
+                '%s: file "%s" is not currently where it was, so it cannot be used.'
                 % (action_label, resource["filename"])
             )
 
@@ -197,7 +197,7 @@ def _validate_resource_ids(
     min_resources = capability.get("min_resources", 0)
     if len(validated) < min_resources:
         raise PlanError(
-            "%s: היכולת הזו דורשת לפחות %d קבצים מהפרויקט."
+            "%s: this capability requires at least %d project files."
             % (action_label, min_resources)
         )
 
@@ -207,33 +207,33 @@ def _validate_resource_ids(
 def validate_actions(project: dict, raw_actions: Any) -> list[dict]:
     """Validate structure *and* meaning of every action against the catalogs."""
     if not isinstance(raw_actions, list):
-        raise PlanError("רשימת הפעולות אינה תקינה.")
+        raise PlanError("The action list is invalid.")
     if not raw_actions:
-        raise PlanError("תוכנית חייבת לכלול לפחות פעולה אחת.")
+        raise PlanError("A plan must contain at least one action.")
     if len(raw_actions) > MAX_ACTIONS:
-        raise PlanError("תוכנית יכולה לכלול עד %d פעולות." % MAX_ACTIONS)
+        raise PlanError("A plan can contain at most %d actions." % MAX_ACTIONS)
 
     catalog = resources.build_catalog(project)
     validated: list[dict] = []
     seen_ids: set[str] = set()
 
     for index, raw in enumerate(raw_actions):
-        action_label = "פעולה %d" % (index + 1)
+        action_label = "Action %d" % (index + 1)
 
         if not isinstance(raw, dict):
-            raise PlanError("%s: מבנה הפעולה אינו תקין." % action_label)
+            raise PlanError("%s: the action structure is invalid." % action_label)
 
         action_id = raw.get("id")
         if not isinstance(action_id, str) or not action_id.strip():
-            raise PlanError("%s: לפעולה חייב להיות מזהה." % action_label)
+            raise PlanError("%s: the action must have an id." % action_label)
 
         action_id = action_id.strip()
         if len(action_id) > MAX_ACTION_ID_LENGTH or not _ACTION_ID_PATTERN.match(action_id):
             raise PlanError(
-                "%s: מזהה הפעולה מכיל תווים לא חוקיים." % action_label
+                "%s: the action id contains invalid characters." % action_label
             )
         if action_id in seen_ids:
-            raise PlanError("%s: מזהה הפעולה כבר בשימוש (%s)." % (action_label, action_id))
+            raise PlanError("%s: the action id is already in use (%s)." % (action_label, action_id))
         seen_ids.add(action_id)
 
         capability = capabilities.get_capability(raw.get("capability_id"))
@@ -322,21 +322,21 @@ def _read_revision_file(project_id: str, plan_id: str, revision: int) -> dict:
     try:
         data = storage.read_json(path)
     except FileNotFoundError as error:
-        raise PlanNotFound("גרסת התוכנית לא נמצאה.") from error
+        raise PlanNotFound("That plan revision was not found.") from error
     except (OSError, ValueError) as error:
         raise PlanError(
-            "לא ניתן לקרוא את קובץ התוכנית: %s" % error, status_code=422
+            "The plan file cannot be read: %s" % error, status_code=422
         ) from error
 
     if not isinstance(data, dict):
-        raise PlanError("קובץ התוכנית פגום.", status_code=422)
+        raise PlanError("The plan file is corrupt.", status_code=422)
 
     schema_version = data.get("schema_version")
     if not isinstance(schema_version, int) or isinstance(schema_version, bool):
-        raise PlanError("קובץ התוכנית פגום: חסרה גרסת סכמה.", status_code=422)
+        raise PlanError("The plan file is corrupt: the schema version is missing.", status_code=422)
     if schema_version > PLAN_SCHEMA_VERSION:
         raise PlanError(
-            "קובץ התוכנית נוצר בגרסה חדשה יותר (%d) ואינו נתמך (%d)."
+            "The plan file was written by a newer version (%d) and is not supported (%d)."
             % (schema_version, PLAN_SCHEMA_VERSION),
             status_code=422,
         )
@@ -383,13 +383,13 @@ def create_revision(
         plan_id = validate_plan_id(plan_id)
         existing = _revision_numbers(project_id, plan_id)
         if not existing:
-            raise PlanNotFound("התוכנית לא נמצאה.")
+            raise PlanNotFound("Plan not found.")
         created_at = _read_revision_file(project_id, plan_id, existing[0]).get(
             "created_at"
         ) or _now()
 
     if len(existing) >= MAX_REVISIONS:
-        raise PlanError("התוכנית הגיעה למספר הגרסאות המרבי.")
+        raise PlanError("The plan has reached the maximum number of revisions.")
 
     document = {
         "schema_version": PLAN_SCHEMA_VERSION,
@@ -418,10 +418,10 @@ def create_revision(
         except FileExistsError:
             document["revision"] += 1
             if attempt == 4:
-                raise PlanError("שמירת גרסת התוכנית נכשלה.", status_code=500) from None
+                raise PlanError("Saving the plan revision failed.", status_code=500) from None
         except OSError as error:
             raise PlanError(
-                "שמירת גרסת התוכנית נכשלה: %s" % error, status_code=500
+                "Saving the plan revision failed: %s" % error, status_code=500
             ) from error
 
     return describe_revision(project, document)
@@ -438,11 +438,11 @@ def approve_revision(project: dict, plan_id: str, revision: int) -> dict:
 
     if described["outdated"]:
         raise PlanError(
-            "התוכנית אינה מעודכנת ביחס לפרויקט, ולכן אי אפשר לאשר אותה. "
-            "יש ליצור תוכנית חדשה או גרסה חדשה."
+            "The plan is out of date with the project, so it cannot be approved. "
+            "Create a new plan or a new revision."
         )
     if not described["is_latest"]:
-        raise PlanError("אפשר לאשר רק את הגרסה האחרונה של התוכנית.")
+        raise PlanError("Only the latest revision of a plan can be approved.")
     if described["approved"]:
         return described
 
@@ -462,7 +462,7 @@ def approve_revision(project: dict, plan_id: str, revision: int) -> dict:
             },
         )
     except OSError as error:
-        raise PlanError("שמירת האישור נכשלה: %s" % error, status_code=500) from error
+        raise PlanError("Saving the approval failed: %s" % error, status_code=500) from error
 
     return read_revision(project, plan_id, revision)
 
@@ -491,7 +491,7 @@ def describe_revision(project: dict, document: dict) -> dict:
             "status": STATUS_APPROVED if approval else STATUS_PROPOSED,
             "outdated": outdated,
             "outdated_reason": (
-                "חומרי הגלם או ההגדרות של הפרויקט השתנו מאז שהתוכנית נוצרה."
+                "The project's footage or settings changed after this plan was created."
                 if outdated
                 else None
             ),
@@ -510,15 +510,15 @@ def _execution_state(described: dict) -> tuple[bool, str | None]:
     if described["outdated"]:
         return False, described["outdated_reason"]
     if not described["approved"]:
-        return False, "התוכנית טרם אושרה. יש לאשר אותה לפני הרצה."
+        return False, "The plan has not been approved yet. Approve it before running."
     if not described["is_latest"]:
-        return False, "קיימת גרסה חדשה יותר של התוכנית."
+        return False, "A newer revision of this plan exists."
 
     for action in described["actions"]:
         capability = capabilities.CAPABILITIES.get(action["capability_id"])
         if capability is None or not capability.get("executable"):
             return False, (
-                'התוכנית כוללת יכולת שאינה זמינה להרצה: "%s".'
+                'The plan includes a capability that is not runnable: "%s".'
                 % action["capability_id"]
             )
 
@@ -536,7 +536,7 @@ def read_latest(project: dict, plan_id: str) -> dict:
     plan_id = validate_plan_id(plan_id)
     revisions = _revision_numbers(project["id"], plan_id)
     if not revisions:
-        raise PlanNotFound("התוכנית לא נמצאה.")
+        raise PlanNotFound("Plan not found.")
     return read_revision(project, plan_id, revisions[-1])
 
 
@@ -583,7 +583,7 @@ def assert_executable(project: dict, plan_id: str, revision: Any) -> dict:
     described = read_revision(project, plan_id, revision)
 
     if not described["executable"]:
-        raise PlanError(described["blocked_reason"] or "אי אפשר להריץ את התוכנית.")
+        raise PlanError(described["blocked_reason"] or "The plan cannot be run.")
 
     # Parameters and resources are validated again here: the catalog may have
     # changed, or a source file may have disappeared since approval.

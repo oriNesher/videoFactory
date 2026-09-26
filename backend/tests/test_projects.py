@@ -373,3 +373,166 @@ def test_malformed_project_does_not_break_the_listing(client, workspace):
 def test_health_and_tools_endpoints_still_respond(client):
     assert client.get("/health").json()["status"] == "ok"
     assert set(client.get("/tools").json()) == {"ffmpeg", "ffprobe", "auto_editor"}
+
+
+# --- adding a whole folder ---------------------------------------------------
+
+
+def add_directory(client, project_id, path):
+    return client.post(
+        f"/projects/{project_id}/sources/directory", json={"path": str(path)}
+    )
+
+
+@pytest.fixture
+def folder(tmp_path):
+    """A folder of takes, deliberately not created in name order."""
+    directory = tmp_path / "shoot 01"
+    directory.mkdir()
+
+    for name in ("take10.mkv", "take2.MP4", "Take1.mov"):
+        (directory / name).write_bytes(b"not a real video")
+
+    # Things that live beside footage and must be ignored, not refused.
+    (directory / "notes.txt").write_text("shot list", encoding="utf-8")
+    (directory / "thumb.png").write_bytes(b"png")
+    (directory / "proxies").mkdir()
+
+    return directory
+
+
+def test_a_folder_loads_its_videos_in_name_order_and_ignores_the_rest(
+    client, folder
+):
+    project = create(client)
+
+    response = add_directory(client, project["id"], folder)
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    assert body["cancelled"] is False
+    assert body["added"] == ["Take1.mov", "take2.MP4", "take10.mkv"]
+    assert sorted(body["ignored"]) == ["notes.txt", "thumb.png"]
+    assert body["failed"] == []
+
+    # The project's own order is the order the clips will be cut in.
+    assert [source["filename"] for source in body["project"]["sources"]] == [
+        "Take1.mov",
+        "take2.MP4",
+        "take10.mkv",
+    ]
+
+
+def test_a_folder_is_added_in_one_write(client, folder, workspace):
+    project = create(client)
+    add_directory(client, project["id"], folder)
+
+    on_disk = json.loads(
+        (workspace / "projects" / project["id"] / "project.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    # One write means one timestamp: three takes must not look like three edits.
+    assert len({source["added_at"] for source in on_disk["sources"]}) == 1
+
+
+def test_re_adding_a_folder_reports_duplicates_instead_of_failing(client, folder):
+    project = create(client)
+    add_directory(client, project["id"], folder)
+
+    second = add_directory(client, project["id"], folder)
+    assert second.status_code == 201
+
+    body = second.json()
+    assert body["added"] == []
+    assert sorted(body["duplicates"]) == ["Take1.mov", "take10.mkv", "take2.MP4"]
+    assert len(body["project"]["sources"]) == 3
+
+
+def test_a_folder_gaining_a_clip_adds_only_the_new_one(client, folder):
+    project = create(client)
+    add_directory(client, project["id"], folder)
+
+    (folder / "take3.mp4").write_bytes(b"not a real video")
+    body = add_directory(client, project["id"], folder).json()
+
+    assert body["added"] == ["take3.mp4"]
+    assert len(body["duplicates"]) == 3
+    assert [s["filename"] for s in body["project"]["sources"]][-1] == "take3.mp4"
+
+
+def test_a_folder_without_video_is_refused_with_a_readable_message(
+    client, tmp_path
+):
+    empty = tmp_path / "documents"
+    empty.mkdir()
+    (empty / "script.docx").write_bytes(b"doc")
+
+    response = add_directory(client, create(client)["id"], empty)
+    assert response.status_code == 400
+    assert "No video files" in response.json()["detail"]
+
+
+def test_a_missing_or_non_folder_path_is_refused(client, tmp_path, video):
+    project = create(client)
+
+    missing = add_directory(client, project["id"], tmp_path / "nope")
+    assert missing.status_code == 400
+    assert "Folder not found" in missing.json()["detail"]
+
+    not_a_folder = add_directory(client, project["id"], video)
+    assert not_a_folder.status_code == 400
+    assert "not a folder" in not_a_folder.json()["detail"]
+
+
+def test_a_relative_path_is_refused(client):
+    response = add_directory(client, create(client)["id"], "videos")
+    assert response.status_code == 400
+    assert "full path" in response.json()["detail"]
+
+
+def test_omitting_the_path_opens_the_machines_folder_dialog(
+    client, folder, monkeypatch
+):
+    """No path means: ask the person, through the OS dialog, not the browser."""
+    from backend import folders
+
+    monkeypatch.setattr(folders, "_ask_for_directory", lambda: str(folder))
+
+    response = client.post(
+        f"/projects/{create(client)['id']}/sources/directory", json={}
+    )
+    assert response.status_code == 201
+    assert response.json()["added"] == ["Take1.mov", "take2.MP4", "take10.mkv"]
+
+
+def test_dismissing_the_dialog_changes_nothing(client, monkeypatch):
+    from backend import folders
+
+    monkeypatch.setattr(folders, "_ask_for_directory", lambda: None)
+
+    project = create(client)
+    response = client.post(
+        f"/projects/{project['id']}/sources/directory", json={}
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {"cancelled": True}
+    assert client.get(f"/projects/{project['id']}").json()["sources"] == []
+
+
+def test_a_dialog_that_cannot_open_says_so_instead_of_hanging(
+    client, monkeypatch
+):
+    from backend import folders
+
+    def unavailable():
+        raise ImportError("no module named tkinter")
+
+    monkeypatch.setattr(folders, "_ask_for_directory", unavailable)
+
+    response = client.post(
+        f"/projects/{create(client)['id']}/sources/directory", json={}
+    )
+    assert response.status_code == 503
+    assert "Paste the folder path instead" in response.json()["detail"]

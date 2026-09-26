@@ -416,7 +416,7 @@ def test_a_source_without_audio_is_refused_with_an_actionable_message(
     assert response.status_code == 400
     detail = response.json()["detail"]
     assert "silent.mp4" in detail
-    assert "אודיו" in detail
+    assert "audio track" in detail
 
 
 @needs_tools
@@ -642,7 +642,7 @@ def test_a_missing_executable_is_reported_as_a_readable_error(
     client, project, stub_sources, monkeypatch
 ):
     def behaviour(fake, argv, cancelled, on_output):
-        raise processes.ProcessStartFailed('הכלי "auto-editor.exe" לא נמצא ב־PATH.')
+        raise processes.ProcessStartFailed('Tool "auto-editor.exe" was not found on PATH.')
 
     monkeypatch.setattr(processes, "run", FakeProcess(behaviour))
 
@@ -686,7 +686,7 @@ def test_an_empty_timeline_names_the_clip_instead_of_dropping_it(
     assert run["combined"]["complete"] is False
     assert run["combined"]["excluded_clips"][0]["source_filename"] == "take 1.mkv"
     assert record["result"]["empty_clip_count"] == 1
-    assert "לא הניבו תוכן" in record["result"]["summary"]
+    assert "yielded no content" in record["result"]["summary"]
 
 
 def test_every_clip_empty_fails_the_run(client, project, stub_sources, monkeypatch):
@@ -699,7 +699,7 @@ def test_every_clip_empty_fails_the_run(client, project, stub_sources, monkeypat
     record = wait_for_job(client, project["id"], response.json()["id"])
 
     assert record["status"] == jobs.FAILED
-    assert "סף האודיו" in record["error"]
+    assert "audio threshold" in record["error"]
 
 
 def test_mixed_dimensions_are_explained_rather_than_stretched(
@@ -722,7 +722,7 @@ def test_mixed_dimensions_are_explained_rather_than_stretched(
     record = wait_for_job(client, project["id"], response.json()["id"])
 
     assert record["status"] == jobs.FAILED
-    assert "ממדים שונים" in record["error"]
+    assert "different dimensions" in record["error"]
 
     run = client.get(f"/projects/{project['id']}/cutting/runs").json()["runs"][0]
     assert run["combined"]["strategy"] == "unsupported_mixed_dimensions"
@@ -792,7 +792,7 @@ def test_a_join_of_the_wrong_length_is_not_accepted(
     record = wait_for_job(client, project["id"], response.json()["id"])
 
     assert record["status"] == jobs.FAILED
-    assert "אינו תואם" in record["error"]
+    assert "does not match" in record["error"]
     # It tried the copy, then fell back to re-encoding before giving up.
     joins = [call for call in fake.calls if call[0].startswith("ffmpeg")]
     assert len(joins) == 2
@@ -1318,7 +1318,7 @@ def test_end_to_end_mixed_dimensions_reports_the_limitation(client, project, tmp
     )
 
     assert record["status"] == jobs.FAILED
-    assert "ממדים שונים" in record["error"]
+    assert "different dimensions" in record["error"]
     assert "320×180" in record["error"] and "180×320" in record["error"]
 
     # Clips-only is the documented way forward, and it works.
@@ -1382,7 +1382,7 @@ def test_end_to_end_everything_cut_away_is_reported_per_clip(client, project, tm
     )
 
     assert record["status"] == jobs.FAILED
-    assert "שתיקה" in record["error"]
+    assert "silence" in record["error"]
 
     run = client.get(f"/projects/{project['id']}/cutting/runs").json()["runs"][0]
     assert run["clips"][0]["status"] == cutting.CLIP_EMPTY
@@ -1395,7 +1395,7 @@ def test_media_probe_rejects_what_it_cannot_use(tmp_path):
 
     with pytest.raises(media.MediaError) as caught:
         media.describe_input(str(silent), require_audio=True)
-    assert "אודיו" in caught.value.message
+    assert "audio track" in caught.value.message
 
     # The same file is fine when audio is not required.
     assert media.describe_input(str(silent), require_audio=False)["has_video"]

@@ -3,12 +3,12 @@ import { cancelJob, listJobs, retryJob, submitJob } from './api'
 import type { Job, JobStatus, ToolCheckResult } from './types'
 
 const STATUS_LABELS: Record<JobStatus, string> = {
-  queued: 'בתור',
-  running: 'פועלת',
-  succeeded: 'הסתיימה',
-  failed: 'נכשלה',
-  cancelled: 'בוטלה',
-  interrupted: 'נקטעה',
+  queued: 'Queued',
+  running: 'Running',
+  succeeded: 'Finished',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  interrupted: 'Interrupted',
 }
 
 const STATUS_CLASS: Record<JobStatus, string> = {
@@ -29,7 +29,7 @@ const POLL_IDLE_MS = 8000
 function formatTime(value: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('he-IL')
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('en-US')
 }
 
 function isToolCheckResult(result: unknown): result is ToolCheckResult {
@@ -66,10 +66,10 @@ function ResultDetails({ job }: { job: Job }) {
           <table className="tools" key={index}>
             <thead>
               <tr>
-                <th>כלי</th>
-                <th>זמין</th>
-                <th>גרסה</th>
-                <th>נתיב</th>
+                <th>Tool</th>
+                <th>Available</th>
+                <th>Version</th>
+                <th>Path</th>
               </tr>
             </thead>
             <tbody>
@@ -77,7 +77,7 @@ function ResultDetails({ job }: { job: Job }) {
                 <tr key={tool.tool}>
                   <td>{tool.label}</td>
                   <td className={tool.available && tool.working ? 'ok' : 'bad'}>
-                    {tool.available ? 'כן' : 'לא'}
+                    {tool.available ? 'Yes' : 'No'}
                   </td>
                   <td className="mono small">
                     {tool.working ? tool.version : (tool.error ?? '—')}
@@ -95,7 +95,7 @@ function ResultDetails({ job }: { job: Job }) {
   if (result && typeof result.explanation === 'string') {
     return (
       <p className="message">
-        <strong>אין יכולת מתאימה: </strong>
+        <strong>No matching capability: </strong>
         {result.explanation}
       </p>
     )
@@ -149,7 +149,7 @@ export default function JobsPanel({
       }
       if (transitioned) notify.current()
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'טעינת המשימות נכשלה.')
+      setError(caught instanceof Error ? caught.message : 'Loading the jobs failed.')
     }
   }, [projectId])
 
@@ -178,7 +178,7 @@ export default function JobsPanel({
       await action()
       await refresh()
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'הפעולה נכשלה.')
+      setError(caught instanceof Error ? caught.message : 'The action failed.')
     } finally {
       setBusy(false)
     }
@@ -187,29 +187,29 @@ export default function JobsPanel({
   return (
     <section className="panel subpanel">
       <div className="editor-header">
-        <h3>משימות רקע</h3>
+        <h3>Background jobs</h3>
         <div className="row">
           <button
             type="button"
             onClick={() => void run(() => submitJob(projectId, 'tool_check'))}
             disabled={busy}
           >
-            הרץ בדיקת כלים
+            Run tool check
           </button>
           <button type="button" onClick={() => void refresh()} disabled={busy}>
-            רענן
+            Refresh
           </button>
         </div>
       </div>
 
       <p className="hint small">
-        משימות רצות ברקע בתור אחד. אפשר להמשיך לעבוד בינתיים; המצב נשמר ושורד
-        הפעלה מחדש של השרת.
+        Jobs run in the background on a single queue. You can keep working meanwhile;
+        their state is saved and survives a server restart.
       </p>
 
       {error && <p className="message error">{error}</p>}
 
-      {jobs.length === 0 && <p className="hint">אין עדיין משימות בפרויקט הזה.</p>}
+      {jobs.length === 0 && <p className="hint">No jobs in this project yet.</p>}
 
       <ul className="jobs">
         {jobs.map((job) => {
@@ -223,9 +223,9 @@ export default function JobsPanel({
                     {STATUS_LABELS[job.status]}
                   </span>
                   {job.cancel_requested && active && (
-                    <span className="badge warn">התבקש ביטול</span>
+                    <span className="badge warn">Cancellation requested</span>
                   )}
-                  {job.retry_of && <span className="badge">הרצה חוזרת</span>}
+                  {job.retry_of && <span className="badge">Re-run</span>}
                 </span>
                 <span className="row">
                   {active && (
@@ -234,7 +234,7 @@ export default function JobsPanel({
                       onClick={() => void run(() => cancelJob(projectId, job.id))}
                       disabled={busy || job.cancel_requested}
                     >
-                      בטל
+                      Cancel
                     </button>
                   )}
                   {!active && (
@@ -243,7 +243,7 @@ export default function JobsPanel({
                       onClick={() => void run(() => retryJob(projectId, job.id))}
                       disabled={busy}
                     >
-                      הרץ שוב
+                      Run again
                     </button>
                   )}
                 </span>
@@ -268,8 +268,8 @@ export default function JobsPanel({
               <ResultDetails job={job} />
 
               <p className="hint small">
-                נוצרה {formatTime(job.created_at)} · התחילה{' '}
-                {formatTime(job.started_at)} · הסתיימה{' '}
+                Created {formatTime(job.created_at)} · started{' '}
+                {formatTime(job.started_at)} · finished{' '}
                 {formatTime(job.finished_at)}
               </p>
             </li>

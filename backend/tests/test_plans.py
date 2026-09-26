@@ -68,7 +68,7 @@ def wait_for_job(client, project_id, job_id, timeout=15.0):
     raise AssertionError("job did not finish: %s" % (record or {}).get("status"))
 
 
-def generate(client, project_id, instruction="בדוק אילו כלי עיבוד מותקנים"):
+def generate(client, project_id, instruction="check which processing tools are installed"):
     response = client.post(
         f"/projects/{project_id}/plans/generate", json={"instruction": instruction}
     )
@@ -180,7 +180,7 @@ def test_generating_a_plan_in_mock_mode_creates_a_proposal(client, project):
 
 
 def test_an_unsupported_request_is_explained_not_invented(client, project):
-    job = generate(client, project["id"], "תחתוך את כל השתיקות ותוסיף כתוביות")
+    job = generate(client, project["id"], "trim all the silences and add subtitles")
 
     assert job["status"] == jobs.SUCCEEDED
     assert job["result"]["supported"] is False
@@ -202,13 +202,13 @@ def test_an_empty_instruction_is_rejected(client, project):
 @pytest.mark.parametrize(
     "actions, fragment",
     [
-        ([{"id": "a1", "capability_id": "video.cut_silence", "parameters": {}}], "אינה קיימת"),
-        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {"tools": ["premiere"]}}], "אינו נתמך"),
-        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {"speed": 2}}], "אינו מוכר"),
-        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {"tools": "ffmpeg"}}], "רשימה"),
-        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {}, "resource_ids": ["nope"]}], "אינה פועלת על חומרי גלם"),
-        ([{"capability_id": TOOL_CHECK, "parameters": {}}], "מזהה"),
-        ([], "לפחות פעולה אחת"),
+        ([{"id": "a1", "capability_id": "video.cut_silence", "parameters": {}}], "does not exist"),
+        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {"tools": ["premiere"]}}], "is not supported"),
+        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {"speed": 2}}], "is not known"),
+        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {"tools": "ffmpeg"}}], "must be a list"),
+        ([{"id": "a1", "capability_id": TOOL_CHECK, "parameters": {}, "resource_ids": ["nope"]}], "does not operate on footage"),
+        ([{"capability_id": TOOL_CHECK, "parameters": {}}], "must have an id"),
+        ([], "at least one action"),
     ],
 )
 def test_invalid_actions_are_rejected_with_a_clear_message(
@@ -229,7 +229,7 @@ def test_duplicate_action_ids_are_rejected(client, project):
         client, project["id"], plan["plan_id"], "תקציר", [action, dict(action)]
     )
     assert response.status_code == 400
-    assert "כבר בשימוש" in response.json()["detail"]
+    assert "already in use" in response.json()["detail"]
 
 
 def test_a_plan_can_never_carry_a_command_or_code(client, project):
@@ -250,7 +250,7 @@ def test_a_plan_can_never_carry_a_command_or_code(client, project):
             ],
         )
         assert response.status_code == 400
-        assert "פקודות" in response.json()["detail"]
+        assert "commands" in response.json()["detail"]
 
 
 def test_an_unknown_resource_reference_is_rejected(client, project, video, monkeypatch):
@@ -278,7 +278,7 @@ def test_an_unknown_resource_reference_is_rejected(client, project, video, monke
         ],
     )
     assert response.status_code == 400
-    assert "אינו קיים בפרויקט" in response.json()["detail"]
+    assert "does not exist in this project" in response.json()["detail"]
 
 
 def test_a_plan_belongs_to_one_project(client, project):
@@ -376,7 +376,7 @@ def test_only_the_latest_revision_can_be_approved(client, project):
 
     response = approve(client, project["id"], plan_id, 1)
     assert response.status_code == 400
-    assert "הגרסה האחרונה" in response.json()["detail"]
+    assert "latest revision" in response.json()["detail"]
 
 
 # --- outdated inputs --------------------------------------------------------
@@ -453,7 +453,7 @@ def test_an_unapproved_plan_cannot_be_executed(client, project):
 
     response = execute(client, project["id"], plan["plan_id"], 1)
     assert response.status_code == 400
-    assert "אושר" in response.json()["detail"]
+    assert "approved" in response.json()["detail"]
 
 
 def test_generation_does_not_approve_or_execute_anything(client, project):
@@ -499,12 +499,12 @@ def test_a_provider_timeout_fails_the_job_with_a_readable_message(
     monkeypatch.setattr(
         llm,
         "get_provider",
-        lambda: _BrokenProvider(llm.ProviderError("הפנייה לספק ה־AI חרגה מהזמן המוקצב.")),
+        lambda: _BrokenProvider(llm.ProviderError("The AI provider call exceeded its time budget.")),
     )
 
     job = generate(client, project["id"])
     assert job["status"] == jobs.FAILED
-    assert "חרגה מהזמן" in job["error"]
+    assert "exceeded its time budget" in job["error"]
     assert client.get(f"/projects/{project['id']}/plans").json()["plans"] == []
 
 
@@ -543,7 +543,7 @@ def test_provider_output_that_fails_validation_is_rejected(client, project, monk
 
     job = generate(client, project["id"])
     assert job["status"] == jobs.FAILED
-    assert "נדחתה באימות" in job["error"]
+    assert "rejected in validation" in job["error"]
     assert client.get(f"/projects/{project['id']}/plans").json()["plans"] == []
 
 

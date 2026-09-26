@@ -85,7 +85,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
     wants_combined = output_mode in (cutting.MODE_COMBINED, cutting.MODE_BOTH)
 
     if not sources:
-        raise jobs.JobFailed("לא נבחרו קבצים לחיתוך.")
+        raise jobs.JobFailed("No files were selected for cutting.")
 
     run_id = cutting.new_run_id()
     directory = cutting.run_directory(project_id, run_id)
@@ -93,7 +93,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
     try:
         (directory / cutting.CLIPS_DIRECTORY).mkdir(parents=True, exist_ok=False)
     except OSError as error:
-        raise jobs.JobFailed("לא ניתן ליצור תיקיית הרצה: %s" % error) from error
+        raise jobs.JobFailed("The run directory could not be created: %s" % error) from error
 
     # Before anything is rendered: would the output paths even fit?
     try:
@@ -101,7 +101,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
     except cutting.CuttingError as error:
         raise jobs.JobFailed(error.message) from error
 
-    context.progress("מכין הרצה חדשה ובודק גרסאות כלים…", percent=0.0)
+    context.progress("Preparing a new run and checking tool versions…", percent=0.0)
 
     manifest = cutting.new_manifest(
         project_id, run_id, context.job_id, job_input, cutting.collect_tool_versions()
@@ -121,7 +121,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         try:
             context.raise_if_cancelled()
         except jobs.JobCancelled:
-            _finish(manifest, cutting.RUN_CANCELLED, "ההרצה בוטלה לפי בקשת המשתמש.")
+            _finish(manifest, cutting.RUN_CANCELLED, "The run was cancelled at your request.")
             raise
 
         number = "%04d" % (index + 1)
@@ -155,7 +155,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         report(
             index,
             0.0,
-            "חותך קטע %d מתוך %d: %s" % (index + 1, len(sources), source["filename"]),
+            "Cutting clip %d of %d: %s" % (index + 1, len(sources), source["filename"]),
         )
 
         throttle = _Throttle()
@@ -172,7 +172,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
             report(
                 _index,
                 fraction,
-                "חותך קטע %d מתוך %d: %s"
+                "Cutting clip %d of %d: %s"
                 % (_index + 1, len(sources), _source["filename"]),
             )
 
@@ -182,14 +182,14 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
             )
         except processes.ProcessCancelled:
             clip["status"] = cutting.CLIP_CANCELLED
-            clip["error"] = "ההרצה בוטלה בזמן עיבוד הקטע הזה."
+            clip["error"] = "The run was cancelled while this clip was being processed."
             clip["finished_at"] = cutting.now()
             # A half-written file is not a result. Removing it here is safe: it
             # was created by this run, inside this run's own directory.
             _discard(output_path)
             manifest["clips"].append(clip)
             _mark_remaining_skipped(manifest, sources, index + 1)
-            _finish(manifest, cutting.RUN_CANCELLED, "ההרצה בוטלה לפי בקשת המשתמש.")
+            _finish(manifest, cutting.RUN_CANCELLED, "The run was cancelled at your request.")
             raise jobs.JobCancelled() from None
         except processes.ProcessStartFailed as error:
             clip["error"] = error.message
@@ -213,9 +213,9 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
             clip["duration_seconds"] = 0.0
             clip["removed_seconds"] = source["duration_seconds"]
             clip["error"] = (
-                'לא נותר תוכן בקובץ "%s" אחרי החיתוך: בהגדרות האלה כל הקובץ '
-                "נחשב שתיקה. הורד את סף האודיו או את \"דיבור מינימלי לשמירה\" "
-                "ונסה שוב." % source["filename"]
+                'Nothing was left of "%s" after cutting: with these settings the whole '
+                'file counted as silence. Lower the audio threshold or the '
+                '"minimum speech to keep" and try again.' % source["filename"]
             )
             _discard(output_path)
             manifest["clips"].append(clip)
@@ -225,7 +225,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
 
         if not result.ok:
             message = (
-                'Auto-Editor נכשל על הקובץ "%s" (קוד יציאה %d).\n%s'
+                'Auto-Editor failed on "%s" (exit code %d).\n%s'
                 % (source["filename"], result.exit_code, result.last_lines())
             )
             clip["error"] = message
@@ -238,7 +238,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         try:
             described = media.verify_output(str(output_path), require_audio=True)
         except media.MediaError as error:
-            message = 'הפלט של "%s" אינו תקין: %s' % (
+            message = 'The output of "%s" is not valid: %s' % (
                 source["filename"],
                 error.message,
             )
@@ -267,8 +267,9 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
 
     if not produced:
         message = (
-            "אף קטע לא הופק: בהגדרות האלה כל הקבצים שנבחרו נחשבו שתיקה מלאה. "
-            "הורד את סף האודיו או את \"דיבור מינימלי לשמירה\" ונסה שוב."
+            "No clip was produced: with these settings every selected file counted "
+            'as pure silence. Lower the audio threshold or the "minimum speech '
+            'to keep" and try again.'
         )
         _finish(manifest, cutting.RUN_FAILED, message)
         raise jobs.JobFailed(message)
@@ -279,13 +280,13 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         try:
             context.raise_if_cancelled()
         except jobs.JobCancelled:
-            _finish(manifest, cutting.RUN_CANCELLED, "ההרצה בוטלה לפי בקשת המשתמש.")
+            _finish(manifest, cutting.RUN_CANCELLED, "The run was cancelled at your request.")
             raise
 
         try:
             _combine(context, manifest, directory, produced, len(sources), total_units)
         except jobs.JobCancelled:
-            _finish(manifest, cutting.RUN_CANCELLED, "ההרצה בוטלה לפי בקשת המשתמש.")
+            _finish(manifest, cutting.RUN_CANCELLED, "The run was cancelled at your request.")
             raise
         except jobs.JobFailed as error:
             _finish(manifest, cutting.RUN_FAILED, error.message)
@@ -309,18 +310,18 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
 
 
 def _summarise(manifest: dict, produced: list, empty: list, combined: dict) -> str:
-    parts = ["הופקו %d קטעים חתוכים מתוך %d מקורות." % (len(produced), len(manifest["sources"]))]
+    parts = ["Produced %d trimmed clips from %d sources." % (len(produced), len(manifest["sources"]))]
 
     if empty:
-        parts.append("%d קבצים לא הניבו תוכן ולא נכללו." % len(empty))
+        parts.append("%d files yielded no content and were left out." % len(empty))
 
     if combined.get("status") == cutting.CLIP_SUCCEEDED:
         parts.append(
-            "נוצר סרטון מאוחד באורך %s."
+            "Created a combined video %s long."
             % _duration_text(combined.get("duration_seconds"))
         )
         if combined.get("complete") is False:
-            parts.append("שים לב: המאוחד אינו כולל את הקבצים שלא הניבו תוכן.")
+            parts.append("Note: the combined video leaves out the files that yielded no content.")
 
     return " ".join(parts)
 
@@ -359,7 +360,7 @@ def _mark_remaining_skipped(manifest: dict, sources: list, start: int) -> None:
                 "video": None,
                 "audio": None,
                 "removed_seconds": None,
-                "error": "ההרצה נעצרה לפני שהקטע הזה עובד.",
+                "error": "The run stopped before this clip was processed.",
                 "log_path": None,
                 "started_at": None,
                 "finished_at": None,
@@ -408,7 +409,7 @@ def _combine(
     manifest["combined"] = combined
     cutting.write_manifest(manifest)
 
-    context.progress("מכין חיבור של %d קטעים…" % len(produced))
+    context.progress("Preparing to join %d clips…" % len(produced))
 
     # Dimensions first. FFmpeg will stream-copy clips of different sizes, exit
     # zero and hand back a file whose duration looks right and whose picture is
@@ -420,9 +421,10 @@ def _combine(
             for clip in produced
         )
         message = (
-            "אי אפשר לחבר קטעים עם ממדים שונים בלי למתוח או לעוות את התמונה, "
-            "והמילסטון הזה לא מבצע התאמת ממדים. הקטעים: %s. אפשר להריץ שוב עם "
-            "קבצים באותו רזולוציה וכיוון, או לבחור פלט של קטעים נפרדים בלבד."
+            "Clips with different dimensions cannot be joined without stretching or "
+            "distorting the picture, and this milestone does not resize. The clips: "
+            "%s. Run again with files at the same resolution and orientation, or "
+            "choose separate-clips output only."
             % listing
         )
         combined["status"] = cutting.CLIP_FAILED
@@ -469,9 +471,9 @@ def _combine(
         context.raise_if_cancelled()
 
         label = (
-            "מחבר את הקטעים בלי קידוד מחדש…"
+            "Joining the clips without re-encoding…"
             if strategy == cutting.COMBINE_STREAM_COPY
-            else "מחבר את הקטעים עם קידוד מחדש (איכות זהה, איטי יותר)…"
+            else "Joining the clips with re-encoding (same quality, slower)…"
         )
         context.progress(
             label, percent=100.0 * unit / total_units
@@ -495,7 +497,7 @@ def _combine(
             )
         except processes.ProcessCancelled:
             combined["status"] = cutting.CLIP_CANCELLED
-            combined["error"] = "החיבור בוטל לפי בקשת המשתמש."
+            combined["error"] = "Joining was cancelled at your request."
             _discard(output_path)
             cutting.write_manifest(manifest)
             raise jobs.JobCancelled() from None
@@ -510,7 +512,7 @@ def _combine(
 
         problem = None
         if not result.ok:
-            problem = "FFmpeg החזיר קוד יציאה %d.\n%s" % (
+            problem = "FFmpeg returned exit code %d.\n%s" % (
                 result.exit_code,
                 result.last_lines(),
             )
@@ -529,8 +531,8 @@ def _combine(
                     # in practice with the concat demuxer and mismatched
                     # sample rates; the re-encoding strategy handles it.
                     problem = (
-                        "אורך הקובץ המאוחד (%.2f שניות) אינו תואם את סכום "
-                        "הקטעים (%.2f שניות)." % (actual, expected)
+                        "The combined file's duration (%.2f s) does not match the "
+                        "sum of the clips (%.2f s)." % (actual, expected)
                     )
                 else:
                     combined["status"] = cutting.CLIP_SUCCEEDED
@@ -548,11 +550,11 @@ def _combine(
 
         if attempt < len(strategies) - 1:
             manifest["notes"].append(
-                "חיבור ללא קידוד מחדש לא הצליח (%s); עובר לקידוד מחדש." % last_error
+                "Joining without re-encoding failed (%s); falling back to re-encoding." % last_error
             )
             cutting.write_manifest(manifest)
 
-    message = "חיבור הקטעים נכשל. %s" % last_error
+    message = "Joining the clips failed. %s" % last_error
     combined["status"] = cutting.CLIP_FAILED
     combined["error"] = message
     cutting.write_manifest(manifest)

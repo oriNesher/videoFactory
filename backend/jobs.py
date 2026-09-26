@@ -141,7 +141,7 @@ def _validate_job_id(raw_id: Any) -> str:
         or len(raw_id) != _JOB_ID_PATTERN_LENGTH
         or not all(character in "0123456789abcdef" for character in raw_id)
     ):
-        raise JobNotFound("מזהה משימה לא חוקי.")
+        raise JobNotFound("Invalid job id.")
     return raw_id
 
 
@@ -158,7 +158,7 @@ def _blank_record(project_id: str, job_type: str, job_input: dict) -> dict:
         "created_at": _now(),
         "started_at": None,
         "finished_at": None,
-        "progress_message": "בהמתנה בתור.",
+        "progress_message": "Waiting in the queue.",
         # Only set when it is genuinely measurable.
         "progress_percent": None,
         "result": None,
@@ -170,21 +170,21 @@ def _blank_record(project_id: str, job_type: str, job_input: dict) -> dict:
 
 def _parse_record(data: Any, project_id: str, job_id: str) -> dict:
     if not isinstance(data, dict):
-        raise JobError("קובץ המשימה פגום.", status_code=422)
+        raise JobError("The job file is corrupt.", status_code=422)
 
     schema_version = data.get("schema_version")
     if not isinstance(schema_version, int) or isinstance(schema_version, bool):
-        raise JobError("קובץ המשימה פגום: חסרה גרסת סכמה.", status_code=422)
+        raise JobError("The job file is corrupt: the schema version is missing.", status_code=422)
     if schema_version > JOB_SCHEMA_VERSION:
         raise JobError(
-            "קובץ המשימה נוצר בגרסה חדשה יותר (%d) ואינו נתמך (%d)."
+            "The job file was written by a newer version (%d) and is not supported (%d)."
             % (schema_version, JOB_SCHEMA_VERSION),
             status_code=422,
         )
 
     status = data.get("status")
     if status not in ACTIVE_STATUSES | FINISHED_STATUSES:
-        raise JobError("קובץ המשימה פגום: סטטוס לא מוכר.", status_code=422)
+        raise JobError("The job file is corrupt: unknown status.", status_code=422)
 
     record = _blank_record(project_id, data.get("type") or "", {})
     record.update(data)
@@ -204,9 +204,9 @@ def read_job(project_id: str, job_id: str) -> dict:
     try:
         data = storage.read_json(path)
     except FileNotFoundError as error:
-        raise JobNotFound("המשימה לא נמצאה.") from error
+        raise JobNotFound("Job not found.") from error
     except (OSError, ValueError) as error:
-        raise JobError("לא ניתן לקרוא את קובץ המשימה: %s" % error, status_code=422) from error
+        raise JobError("The job file cannot be read: %s" % error, status_code=422) from error
 
     return _parse_record(data, project_id, job_id)
 
@@ -331,10 +331,10 @@ class JobManager:
 
                 record["status"] = INTERRUPTED
                 record["finished_at"] = _now()
-                record["progress_message"] = "המשימה נקטעה."
+                record["progress_message"] = "The job was interrupted."
                 record["error"] = (
-                    "השרת הופעל מחדש בזמן שהמשימה הייתה פעילה, ולכן היא סומנה "
-                    "כנקטעה. אפשר להריץ אותה שוב."
+                    "The server restarted while this job was active, so it was marked "
+                    "as interrupted. You can run it again."
                 )
                 self._write(record)
                 recovered.append(record)
@@ -356,7 +356,7 @@ class JobManager:
 
         if not isinstance(job_type, str) or job_type not in JOB_TYPES:
             known = ", ".join(sorted(JOB_TYPES))
-            raise JobError("סוג משימה לא נתמך. הסוגים הנתמכים: %s" % known)
+            raise JobError("Unsupported job type. Supported types: %s" % known)
 
         validator = JOB_TYPES[job_type]["validate_input"]
         job_input = validator(project_id, raw_input) if validator else {}
@@ -374,9 +374,9 @@ class JobManager:
         record = read_job(project_id, job_id)
 
         if record["status"] in ACTIVE_STATUSES:
-            raise JobConflict("המשימה עדיין פעילה; אי אפשר להריץ אותה שוב כעת.")
+            raise JobConflict("The job is still active; it cannot be re-run right now.")
         if record["type"] not in JOB_TYPES:
-            raise JobError("סוג המשימה אינו נתמך עוד ולכן אי אפשר להריץ אותה שוב.")
+            raise JobError("This job type is no longer supported, so it cannot be re-run.")
 
         retried = _blank_record(record["project_id"], record["type"], record["input"])
         retried["retry_of"] = record["id"]
@@ -394,7 +394,7 @@ class JobManager:
             record = read_job(project_id, job_id)
 
             if record["status"] in FINISHED_STATUSES:
-                raise JobConflict("המשימה כבר הסתיימה ואי אפשר לבטל אותה.")
+                raise JobConflict("The job has already finished and cannot be cancelled.")
 
             event = self._cancel_events.setdefault(record["id"], threading.Event())
             event.set()
@@ -404,13 +404,13 @@ class JobManager:
                 # Nothing has started, so this is immediate and truthful.
                 record["status"] = CANCELLED
                 record["finished_at"] = _now()
-                record["progress_message"] = "בוטלה לפני שהתחילה."
+                record["progress_message"] = "Cancelled before it started."
                 self._write(record)
                 return record
 
             # Running: the handler stops at its next cancellation check. The
             # status stays `running` until it actually does.
-            record["progress_message"] = "התקבלה בקשת ביטול; ממתין לעצירה…"
+            record["progress_message"] = "Cancellation requested; waiting for it to stop…"
             self._write(record)
             return record
 
@@ -451,7 +451,7 @@ class JobManager:
                 storage.write_json_atomic(path, record)
             except OSError as error:
                 raise JobError(
-                    "שמירת מצב המשימה נכשלה: %s" % error, status_code=500
+                    "Saving the job state failed: %s" % error, status_code=500
                 ) from error
 
     def _work(self) -> None:
@@ -486,13 +486,13 @@ class JobManager:
             if event.is_set() or self._stopping:
                 record["status"] = CANCELLED
                 record["finished_at"] = _now()
-                record["progress_message"] = "בוטלה לפני שהתחילה."
+                record["progress_message"] = "Cancelled before it started."
                 self._write(record)
                 return
 
             record["status"] = RUNNING
             record["started_at"] = _now()
-            record["progress_message"] = "מתחיל…"
+            record["progress_message"] = "Starting…"
             self._write(record)
 
         context = JobContext(self, record)
@@ -506,7 +506,7 @@ class JobManager:
         except JobFailed as error:
             outcome = (FAILED, None, error.message)
         except Exception as error:  # noqa: BLE001 - reported, never swallowed
-            outcome = (FAILED, None, "המשימה נכשלה: %s" % error)
+            outcome = (FAILED, None, "The job failed: %s" % error)
 
         status, result, error_message = outcome
 
@@ -522,12 +522,12 @@ class JobManager:
             record["error"] = error_message
 
             if status == SUCCEEDED:
-                record["progress_message"] = "הסתיימה בהצלחה."
+                record["progress_message"] = "Finished successfully."
                 record["progress_percent"] = 100.0
             elif status == CANCELLED:
-                record["progress_message"] = "בוטלה."
+                record["progress_message"] = "Cancelled."
             else:
-                record["progress_message"] = "נכשלה."
+                record["progress_message"] = "Failed."
 
             self._write(record)
             self._cancel_events.pop(job_id, None)

@@ -68,21 +68,22 @@ MODE_BOTH = "both"
 OUTPUT_MODES = {
     MODE_CLIPS: {
         "id": MODE_CLIPS,
-        "label": "קטעים נפרדים בלבד",
-        "description": "קובץ MP4 חתוך אחד לכל מקור, לפי סדר הבחירה.",
+        "label": "Separate clips only",
+        "description": "One trimmed MP4 per source, in the order you chose.",
     },
     MODE_COMBINED: {
         "id": MODE_COMBINED,
-        "label": "סרטון מאוחד בלבד",
+        "label": "Combined video only",
         "description": (
-            "קובץ MP4 אחד שמחבר את כל הקטעים החתוכים לפי הסדר. הקטעים הנפרדים "
-            "נוצרים ממילא כשלב ביניים ונשמרים, אך רק המאוחד נרשם כתוצר הפרויקט."
+            "A single MP4 joining every trimmed clip in order. The separate clips are "
+            "produced as an intermediate step and kept, but only the combined "
+            "file is recorded as a project output."
         ),
     },
     MODE_BOTH: {
         "id": MODE_BOTH,
-        "label": "גם קטעים נפרדים וגם סרטון מאוחד",
-        "description": "שני סוגי הפלט נרשמים כתוצרי הפרויקט.",
+        "label": "Both separate clips and a combined video",
+        "description": "Both kinds of output are recorded as project outputs.",
     },
 }
 
@@ -102,11 +103,11 @@ SETTINGS_SPEC: dict[str, dict] = {
         "min": 0.0,
         "max": 1.0,
         "step": 0.005,
-        "unit": "יחס עוצמה (0–1)",
-        "label": "סף אודיו",
+        "unit": "loudness ratio (0-1)",
+        "label": "Audio threshold",
         "description": (
-            "מאיזו עוצמת אודיו קטע נחשב דיבור. 0.04 = 4% מהעוצמה המרבית. "
-            "ערך נמוך יותר שומר יותר אודיו; ערך גבוה יותר חותך יותר."
+            "How loud audio has to be to count as speech. 0.04 = 4% of peak "
+            "loudness. A lower value keeps more audio; a higher value cuts more."
         ),
         "maps_to": "--edit audio:threshold=",
     },
@@ -116,13 +117,13 @@ SETTINGS_SPEC: dict[str, dict] = {
         "min": 0.0,
         "max": 10.0,
         "step": 0.05,
-        "unit": "שניות",
-        "label": "שוליים לפני דיבור",
+        "unit": "seconds",
+        "label": "Margin before speech",
         "description": (
-            "כמה זמן להשאיר לפני תחילת הדיבור שזוהה, כדי לא לחתוך את ההברה "
-            "הראשונה."
+            "How much to keep before detected speech starts, so the first syllable "
+            "is not clipped."
         ),
-        "maps_to": "--margin (ערך ראשון)",
+        "maps_to": "--margin (first value)",
     },
     "margin_after_seconds": {
         "type": "number",
@@ -130,13 +131,13 @@ SETTINGS_SPEC: dict[str, dict] = {
         "min": 0.0,
         "max": 10.0,
         "step": 0.05,
-        "unit": "שניות",
-        "label": "שוליים אחרי דיבור",
+        "unit": "seconds",
+        "label": "Margin after speech",
         "description": (
-            "כמה זמן להשאיר אחרי סוף הדיבור שזוהה. ערך נדיב כאן מונע תחושת "
-            "קטיעה בסוף משפט."
+            "How much to keep after detected speech ends. A generous value here "
+            "keeps sentences from feeling chopped off."
         ),
-        "maps_to": "--margin (ערך שני)",
+        "maps_to": "--margin (second value)",
     },
     "min_silence_seconds": {
         "type": "number",
@@ -144,11 +145,11 @@ SETTINGS_SPEC: dict[str, dict] = {
         "min": 0.0,
         "max": 30.0,
         "step": 0.05,
-        "unit": "שניות",
-        "label": "שתיקה מינימלית לחיתוך",
+        "unit": "seconds",
+        "label": "Minimum silence to cut",
         "description": (
-            "שתיקה קצרה מהערך הזה לא תיחתך כלל. ערך נמוך יותר = חיתוך אגרסיבי "
-            "יותר, כי גם הפסקות קצרות מוסרות."
+            "Silence shorter than this is never cut. A lower value means more "
+            "aggressive cutting, because short pauses go too."
         ),
         "maps_to": "--smooth (MINCUT)",
     },
@@ -158,11 +159,11 @@ SETTINGS_SPEC: dict[str, dict] = {
         "min": 0.0,
         "max": 30.0,
         "step": 0.05,
-        "unit": "שניות",
-        "label": "דיבור מינימלי לשמירה",
+        "unit": "seconds",
+        "label": "Minimum speech to keep",
         "description": (
-            "קטע דיבור קצר מהערך הזה ייחשב לרעש ויוסר. ערך גבוה יותר = חיתוך "
-            "אגרסיבי יותר."
+            "A speech segment shorter than this is treated as noise and removed. "
+            "A higher value means more aggressive cutting."
         ),
         "maps_to": "--smooth (MINCLIP)",
     },
@@ -248,13 +249,13 @@ def validate_settings(raw: Any) -> dict:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise CuttingError("הגדרות החיתוך אינן תקינות.")
+        raise CuttingError("The cutting settings are invalid.")
 
     for name in raw:
         if name not in SETTINGS_SPEC:
             allowed = ", ".join(SETTINGS_SPEC)
             raise CuttingError(
-                'ההגדרה "%s" אינה מוכרת. ההגדרות האפשריות: %s.' % (name, allowed)
+                'Setting "%s" is not recognised. Available settings: %s.' % (name, allowed)
             )
 
     validated: dict = {}
@@ -265,14 +266,14 @@ def validate_settings(raw: Any) -> dict:
 
         value = raw[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise CuttingError('ההגדרה "%s" חייבת להיות מספר.' % spec["label"])
+            raise CuttingError('Setting "%s" must be a number.' % spec["label"])
 
         value = float(value)
         if value != value:  # NaN
-            raise CuttingError('ההגדרה "%s" חייבת להיות מספר.' % spec["label"])
+            raise CuttingError('Setting "%s" must be a number.' % spec["label"])
         if value < spec["min"] or value > spec["max"]:
             raise CuttingError(
-                'ההגדרה "%s" חייבת להיות בין %s ל־%s (%s).'
+                'Setting "%s" must be between %s and %s (%s).'
                 % (spec["label"], spec["min"], spec["max"], spec["unit"])
             )
 
@@ -286,7 +287,7 @@ def validate_output_mode(raw: Any) -> str:
         return DEFAULT_OUTPUT_MODE
     if not isinstance(raw, str) or raw not in OUTPUT_MODES:
         allowed = ", ".join(OUTPUT_MODES)
-        raise CuttingError("מצב פלט לא נתמך. המצבים האפשריים: %s." % allowed)
+        raise CuttingError("Unsupported output mode. Available modes: %s." % allowed)
     return raw
 
 
@@ -326,7 +327,7 @@ def read_settings(project: dict) -> dict:
 def save_settings(project_id: str, raw: Any) -> dict:
     """Persist the cutting form with the project, validated first."""
     if not isinstance(raw, dict):
-        raise CuttingError("הגדרות החיתוך אינן תקינות.")
+        raise CuttingError("The cutting settings are invalid.")
 
     project = storage.read_project(project_id)
     settings = validate_settings(raw.get("settings"))
@@ -353,7 +354,7 @@ def _validate_source_ids(
     if raw is None:
         raw = []
     if not isinstance(raw, list):
-        raise CuttingError("רשימת הקבצים לחיתוך אינה תקינה.")
+        raise CuttingError("The list of files to cut is invalid.")
 
     known = {source["id"] for source in project.get("sources", [])}
     ordered: list[str] = []
@@ -361,17 +362,17 @@ def _validate_source_ids(
     for value in raw:
         if not isinstance(value, str) or value not in known:
             raise CuttingError(
-                "אחד הקבצים שנבחרו אינו קיים בפרויקט. רענן את הדף ובחר שוב."
+                "One of the selected files is not in the project. Refresh the page and select again."
             )
         if value in ordered:
-            raise CuttingError("אותו קובץ נבחר יותר מפעם אחת.")
+            raise CuttingError("The same file was selected more than once.")
         ordered.append(value)
 
     if not ordered and not allow_empty:
-        raise CuttingError("יש לבחור לפחות קובץ אחד לחיתוך.")
+        raise CuttingError("Select at least one file to cut.")
     if len(ordered) > MAX_SOURCES_PER_RUN:
         raise CuttingError(
-            "אפשר לחתוך עד %d קבצים בהרצה אחת." % MAX_SOURCES_PER_RUN
+            "Up to %d files can be cut in one run." % MAX_SOURCES_PER_RUN
         )
 
     return ordered
@@ -386,7 +387,7 @@ def build_job_input(project_id: str, raw: Any) -> dict:
     and so a retry re-runs the same thing.
     """
     if not isinstance(raw, dict):
-        raise CuttingError("בקשת החיתוך אינה תקינה.")
+        raise CuttingError("The cut request is invalid.")
 
     project = storage.read_project(project_id)
     source_ids = _validate_source_ids(project, raw.get("source_ids"))
@@ -402,8 +403,8 @@ def build_job_input(project_id: str, raw: Any) -> dict:
 
         if not os.path.isfile(path):
             raise CuttingError(
-                'הקובץ "%s" לא נמצא במיקומו (%s). החזר אותו למקום או הסר אותו '
-                "מהבחירה." % (filename, path)
+                'File "%s" is no longer where it was (%s). Put it back or remove it '
+                "from the selection." % (filename, path)
             )
 
         try:
@@ -569,13 +570,13 @@ def run_directory(project_id: str, run_id: str) -> Path:
 
 def validate_run_id(raw: Any) -> str:
     if not isinstance(raw, str) or not _RUN_ID_PATTERN.match(raw):
-        raise RunNotFound("מזהה הרצה לא חוקי.")
+        raise RunNotFound("Invalid run id.")
     return raw
 
 
 def validate_output_id(raw: Any) -> str:
     if not isinstance(raw, str) or not _OUTPUT_ID_PATTERN.match(raw):
-        raise RunNotFound("מזהה פלט לא חוקי.")
+        raise RunNotFound("Invalid output id.")
     return raw
 
 
@@ -606,7 +607,7 @@ def write_manifest(manifest: dict) -> None:
         storage.write_json_atomic(path, manifest)
     except OSError as error:
         raise CuttingError(
-            "שמירת פרטי ההרצה נכשלה: %s" % error, status_code=500
+            "Saving the run details failed: %s" % error, status_code=500
         ) from error
 
 
@@ -617,19 +618,19 @@ def read_manifest(project_id: str, run_id: str) -> dict:
     try:
         data = storage.read_json(manifest_path(project_id, run_id))
     except FileNotFoundError as error:
-        raise RunNotFound("ההרצה לא נמצאה.") from error
+        raise RunNotFound("Run not found.") from error
     except (OSError, ValueError) as error:
         raise CuttingError(
-            "לא ניתן לקרוא את פרטי ההרצה: %s" % error, status_code=422
+            "The run details cannot be read: %s" % error, status_code=422
         ) from error
 
     if not isinstance(data, dict):
-        raise CuttingError("קובץ ההרצה פגום.", status_code=422)
+        raise CuttingError("The run file is corrupt.", status_code=422)
 
     version = data.get("schema_version")
     if isinstance(version, int) and version > RUN_SCHEMA_VERSION:
         raise CuttingError(
-            "קובץ ההרצה נוצר בגרסה חדשה יותר (%d) ואינו נתמך (%d)."
+            "The run file was written by a newer version (%d) and is not supported (%d)."
             % (version, RUN_SCHEMA_VERSION),
             status_code=422,
         )
@@ -743,20 +744,20 @@ def resolve_output(project_id: str, run_id: str, output_id: str) -> tuple[Path, 
                 break
 
     if entry is None or entry.get("status") != CLIP_SUCCEEDED:
-        raise RunNotFound("הפלט המבוקש אינו קיים בהרצה הזו.")
+        raise RunNotFound("That output does not exist in this run.")
 
     relative = entry.get("relative_path")
     if not isinstance(relative, str) or not relative:
-        raise RunNotFound("הפלט המבוקש אינו קיים בהרצה הזו.")
+        raise RunNotFound("That output does not exist in this run.")
 
     directory = run_directory(project_id, run_id).resolve()
     resolved = (directory / relative).resolve()
 
     if not resolved.is_relative_to(directory):
-        raise RunNotFound("הפלט המבוקש אינו קיים בהרצה הזו.")
+        raise RunNotFound("That output does not exist in this run.")
     if not resolved.is_file():
         raise RunNotFound(
-            "קובץ הפלט אינו נמצא עוד בתיקיית ההרצה. ייתכן שנמחק ידנית."
+            "The output file is no longer in the run directory. It may have been deleted by hand."
         )
 
     return resolved, entry
@@ -920,8 +921,9 @@ def check_path_budget(directory: Path, sources: list[dict]) -> None:
         return
 
     raise CuttingError(
-        "נתיב הפלט ארוך מדי עבור Windows (%d תווים, המגבלה %d). קצר את שם "
-        "הקובץ, או העבר את תיקיית העבודה לנתיב קצר יותר עם משתנה הסביבה "
-        "VIDEO_FACTORY_WORKSPACE (למשל D:\\VF). הנתיב הבעייתי: %s"
+        "The output path is too long for Windows (%d characters, limit %d). "
+        "Shorten the file name, or move the workspace somewhere shorter with "
+        "the VIDEO_FACTORY_WORKSPACE environment variable (for example D:\\VF). "
+        "The offending path: %s"
         % (len(longest), WINDOWS_MAX_PATH, longest)
     )

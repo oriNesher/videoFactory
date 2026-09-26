@@ -7,6 +7,21 @@ export type SourceMedia = {
   size_bytes: number | null
 }
 
+/** What came of adding a folder: partial success is normal and is reported. */
+export type AddDirectoryResult = {
+  /** True when the folder dialog was dismissed; nothing else is set. */
+  cancelled: boolean
+  project?: Project
+  directory?: string
+  /** File names added, in the order they will be cut. */
+  added?: string[]
+  /** Already in the project, so left alone. */
+  duplicates?: string[]
+  /** Not video files, so skipped. */
+  ignored?: string[]
+  failed?: { filename: string; error: string }[]
+}
+
 export type Project = {
   schema_version: number
   id: string

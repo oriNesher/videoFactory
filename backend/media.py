@@ -57,17 +57,17 @@ def _ffprobe(path: str, arguments: list[str]) -> str:
         )
     except FileNotFoundError as error:
         raise MediaError(
-            "לא נמצא FFprobe ב־PATH. התקן את FFmpeg או הוסף אותו ל־PATH."
+            "FFprobe was not found on PATH. Install FFmpeg or add it to PATH."
         ) from error
     except subprocess.TimeoutExpired as error:
-        raise MediaError("בדיקת הקובץ נמשכה זמן רב מדי ונעצרה: %s" % path) from error
+        raise MediaError("Probing the file took too long and was stopped: %s" % path) from error
     except OSError as error:
-        raise MediaError("לא ניתן להריץ את FFprobe: %s" % error) from error
+        raise MediaError("FFprobe could not be run: %s" % error) from error
 
     if result.returncode != 0:
         detail = (result.stderr or "").strip().splitlines()
-        reason = detail[-1] if detail else "FFprobe החזיר שגיאה ללא פירוט."
-        raise MediaError("FFprobe לא הצליח לקרוא את הקובץ: %s" % reason)
+        reason = detail[-1] if detail else "FFprobe reported an error with no detail."
+        raise MediaError("FFprobe could not read the file: %s" % reason)
 
     return result.stdout or ""
 
@@ -101,7 +101,7 @@ def probe(path: str) -> dict:
     so the caller can report a specific reason.
     """
     if not os.path.isfile(path):
-        raise MediaError("הקובץ לא נמצא: %s" % path)
+        raise MediaError("File not found: %s" % path)
 
     raw = _ffprobe(
         path,
@@ -119,7 +119,7 @@ def probe(path: str) -> dict:
     try:
         data = json.loads(raw)
     except ValueError as error:
-        raise MediaError("תשובת FFprobe אינה תקינה עבור: %s" % path) from error
+        raise MediaError("FFprobe returned an invalid response for: %s" % path) from error
 
     streams = data.get("streams") or []
     container = data.get("format") or {}
@@ -175,21 +175,21 @@ def describe_input(path: str, *, require_audio: bool = True) -> dict:
 
     if not described["has_video"]:
         raise MediaError(
-            'בקובץ "%s" אין מסלול וידאו, ולכן אי אפשר להפיק ממנו קטע חתוך.'
+            'File "%s" has no video track, so no trimmed clip can be produced from it.'
             % filename
         )
 
     if require_audio and not described["has_audio"]:
         raise MediaError(
-            'בקובץ "%s" אין מסלול אודיו. החיתוך במצב הזה מבוסס על עוצמת האודיו, '
-            "ולכן אי אפשר לזהות בו דיבור או שתיקה. הוסף לקובץ מסלול אודיו או "
-            "הסר אותו מהבחירה." % filename
+            'File "%s" has no audio track. Cutting in this mode is driven by audio '
+            "loudness, so speech and silence cannot be detected in it. Add an "
+            "audio track or remove it from the selection." % filename
         )
 
     duration = described["duration_seconds"]
     if duration is None or duration <= 0:
         raise MediaError(
-            'לא ניתן לקבוע את אורך הקובץ "%s". ייתכן שהוא פגום או עדיין בכתיבה.'
+            'The duration of file "%s" cannot be determined. It may be corrupt or still being written.'
             % filename
         )
 
@@ -199,26 +199,26 @@ def describe_input(path: str, *, require_audio: bool = True) -> dict:
 def verify_output(path: str, *, require_audio: bool = True) -> dict:
     """Probe a *produced* file. A zero exit code alone is never enough."""
     if not os.path.isfile(path):
-        raise MediaError("הכלי דיווח על הצלחה אך לא נוצר קובץ פלט: %s" % path)
+        raise MediaError("The tool reported success but no output file was created: %s" % path)
 
     if os.path.getsize(path) == 0:
-        raise MediaError("קובץ הפלט שנוצר ריק: %s" % os.path.basename(path))
+        raise MediaError("The output file that was created is empty: %s" % os.path.basename(path))
 
     described = probe(path)
 
     if not described["has_video"]:
         raise MediaError(
-            "קובץ הפלט %s נוצר אך אין בו מסלול וידאו." % described["filename"]
+            "Output file %s was created but has no video track." % described["filename"]
         )
     if require_audio and not described["has_audio"]:
         raise MediaError(
-            "קובץ הפלט %s נוצר אך אין בו מסלול אודיו." % described["filename"]
+            "Output file %s was created but has no audio track." % described["filename"]
         )
 
     duration = described["duration_seconds"]
     if duration is None or duration <= 0:
         raise MediaError(
-            "קובץ הפלט %s נוצר אך אורכו אינו ניתן לקריאה." % described["filename"]
+            "Output file %s was created but its duration cannot be read." % described["filename"]
         )
 
     return described
@@ -244,7 +244,7 @@ def fingerprint(path: str) -> dict:
 
         modified_ns = os.stat(path).st_mtime_ns
     except OSError as error:
-        raise MediaError("לא ניתן לקרוא את הקובץ לצורך טביעת אצבע: %s" % error) from error
+        raise MediaError("The file could not be read to fingerprint it: %s" % error) from error
 
     return {
         "method": FINGERPRINT_METHOD,
@@ -290,7 +290,7 @@ def geometry_label(described: dict) -> str:
     video = described.get("video") or {}
     width, height = video.get("width"), video.get("height")
     if not width or not height:
-        return "לא ידוע"
+        return "unknown"
     return "%d×%d" % (width, height)
 
 

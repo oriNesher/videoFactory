@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { addSource, createProject, listProjects, loadProject, saveProject } from './api'
+import {
+  addSourceDirectory,
+  createProject,
+  listProjects,
+  loadProject,
+  saveProject,
+} from './api'
 import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
 import PlanPanel from './PlanPanel'
@@ -10,7 +16,7 @@ type Message = { kind: 'ok' | 'error'; text: string } | null
 function formatDate(value: string): string {
   if (!value) return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('he-IL')
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-US')
 }
 
 function formatSize(bytes: number | null): string {
@@ -35,7 +41,11 @@ export default function ProjectsScreen() {
   const [draftName, setDraftName] = useState('')
   const [draftSources, setDraftSources] = useState<SourceMedia[]>([])
 
+  // Only used by the fallback below, which appears if the native folder dialog
+  // cannot be opened on this machine.
   const [pathInput, setPathInput] = useState('')
+  const [needsPathFallback, setNeedsPathFallback] = useState(false)
+
   const [message, setMessage] = useState<Message>(null)
   const [busy, setBusy] = useState(false)
 
@@ -54,7 +64,7 @@ export default function ProjectsScreen() {
       setListing(await listProjects())
       setListError('')
     } catch (caught) {
-      setListError(caught instanceof Error ? caught.message : 'טעינת הרשימה נכשלה.')
+      setListError(caught instanceof Error ? caught.message : 'Loading the project list failed.')
     }
   }, [])
 
@@ -83,7 +93,7 @@ export default function ProjectsScreen() {
   function confirmDiscard(): boolean {
     if (!dirty) return true
     return window.confirm(
-      'יש שינויים שלא נשמרו בפרויקט הנוכחי. לעזוב בלי לשמור?',
+      'There are unsaved changes in the current project. Leave without saving?',
     )
   }
 
@@ -96,13 +106,13 @@ export default function ProjectsScreen() {
       const created = await createProject(newName)
       adopt(created)
       setNewName('')
-      setCreateMessage({ kind: 'ok', text: `הפרויקט "${created.name}" נוצר.` })
+      setCreateMessage({ kind: 'ok', text: `Project "${created.name}" was created.` })
       setMessage(null)
       await refreshListing()
     } catch (caught) {
       setCreateMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'יצירת הפרויקט נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Creating the project failed.',
       })
     } finally {
       setBusy(false)
@@ -121,42 +131,87 @@ export default function ProjectsScreen() {
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'פתיחת הפרויקט נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Opening the project failed.',
       })
     } finally {
       setBusy(false)
     }
   }
 
-  async function handleAddSource(event: React.FormEvent) {
-    event.preventDefault()
+  /**
+   * Fold the server's new source list into the draft.
+   *
+   * Keeps the unsaved order and name: the draft order is re-applied to the
+   * server's list, and whatever is new is appended in the order it arrived.
+   */
+  function adoptNewSources(updated: Project) {
+    setProject(updated)
+
+    const draftIds = new Set(draftSources.map((source) => source.id))
+    const byId = new Map(updated.sources.map((source) => [source.id, source]))
+    setDraftSources([
+      ...draftSources.flatMap((source) => {
+        const current = byId.get(source.id)
+        return current ? [current] : []
+      }),
+      ...updated.sources.filter((source) => !draftIds.has(source.id)),
+    ])
+  }
+
+  /**
+   * Add a folder of clips.
+   *
+   * With no path the backend opens the machine's own folder dialog, so this
+   * request stays open for as long as that dialog is on screen. `path` is only
+   * passed by the fallback field, which appears if the dialog is unavailable.
+   */
+  async function handleAddFolder(path?: string) {
     if (!project) return
 
     setBusy(true)
+    setMessage(null)
     try {
-      const updated = await addSource(project.id, pathInput)
-      setProject(updated)
+      const result = await addSourceDirectory(project.id, path)
+      if (result.cancelled || !result.project) {
+        setBusy(false)
+        return
+      }
 
-      // Keep the unsaved order and name: re-apply the draft order to the
-      // server's list and append whatever is new (the file just added).
-      const draftIds = new Set(draftSources.map((source) => source.id))
-      const byId = new Map(updated.sources.map((source) => [source.id, source]))
-      setDraftSources([
-        ...draftSources.flatMap((source) => {
-          const current = byId.get(source.id)
-          return current ? [current] : []
-        }),
-        ...updated.sources.filter((source) => !draftIds.has(source.id)),
-      ])
-
+      adoptNewSources(result.project)
       setPathInput('')
-      setMessage({ kind: 'ok', text: 'הקובץ נוסף לפרויקט ונשמר.' })
+      setNeedsPathFallback(false)
+
+      const added = result.added ?? []
+      const notes: string[] = []
+      if (result.duplicates?.length) {
+        notes.push(`${result.duplicates.length} already in the project`)
+      }
+      if (result.ignored?.length) {
+        notes.push(`${result.ignored.length} non-video files ignored`)
+      }
+      for (const failure of result.failed ?? []) {
+        notes.push(`${failure.filename}: ${failure.error}`)
+      }
+
+      setMessage({
+        kind: added.length > 0 ? 'ok' : 'error',
+        text:
+          added.length > 0
+            ? `Added ${added.length} clips from ${result.directory}, ordered by name.` +
+              (notes.length > 0 ? ` (${notes.join('; ')})` : '')
+            : `Nothing new was added from ${result.directory}.` +
+              (notes.length > 0 ? ` ${notes.join('; ')}.` : ''),
+      })
       await refreshListing()
     } catch (caught) {
-      setMessage({
-        kind: 'error',
-        text: caught instanceof Error ? caught.message : 'הוספת הקובץ נכשלה.',
-      })
+      const text =
+        caught instanceof Error ? caught.message : 'Adding the folder failed.'
+      // The dialog needs a desktop session and Tk. Where it cannot open, the
+      // path field is the only way left to add footage, so reveal it.
+      if (text.includes('Paste the folder path instead')) {
+        setNeedsPathFallback(true)
+      }
+      setMessage({ kind: 'error', text })
     } finally {
       setBusy(false)
     }
@@ -186,12 +241,12 @@ export default function ProjectsScreen() {
         draftSources.map((source) => source.id),
       )
       adopt(saved)
-      setMessage({ kind: 'ok', text: `נשמר בהצלחה ב־${formatDate(saved.updated_at)}.` })
+      setMessage({ kind: 'ok', text: `Saved at ${formatDate(saved.updated_at)}.` })
       await refreshListing()
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'השמירה נכשלה.',
+        text: caught instanceof Error ? caught.message : 'Saving failed.',
       })
     } finally {
       setBusy(false)
@@ -200,7 +255,7 @@ export default function ProjectsScreen() {
 
   function handleRevert() {
     if (!project) return
-    if (!window.confirm('לבטל את כל השינויים שלא נשמרו?')) return
+    if (!window.confirm('Discard all unsaved changes?')) return
     adopt(project)
     setMessage(null)
   }
@@ -210,17 +265,17 @@ export default function ProjectsScreen() {
   return (
     <div className="projects">
       <section className="panel sidebar">
-        <h2>פרויקטים</h2>
+        <h2>Projects</h2>
 
         <form className="row" onSubmit={handleCreate}>
           <input
             type="text"
             value={newName}
-            placeholder="שם פרויקט חדש"
+            placeholder="New project name"
             onChange={(event) => setNewName(event.target.value)}
           />
           <button type="submit" className="primary" disabled={busy}>
-            צור
+            Create
           </button>
         </form>
 
@@ -244,12 +299,12 @@ export default function ProjectsScreen() {
                 <span className="entry-name">{entry.name}</span>
                 <span className="small">
                   {entry.error
-                    ? `קובץ פרויקט פגום: ${entry.error}`
-                    : `${entry.source_count} מקורות · עודכן ${formatDate(entry.updated_at)}`}
+                    ? `Corrupt project file: ${entry.error}`
+                    : `${entry.source_count} sources · updated ${formatDate(entry.updated_at)}`}
                 </span>
                 {entry.missing_source_count > 0 && (
                   <span className="badge bad">
-                    {entry.missing_source_count} קבצים חסרים
+                    {entry.missing_source_count} files missing
                   </span>
                 )}
               </button>
@@ -258,25 +313,25 @@ export default function ProjectsScreen() {
         </ul>
 
         {listing && listing.projects.length === 0 && (
-          <p className="hint">אין עדיין פרויקטים. צור פרויקט חדש כדי להתחיל.</p>
+          <p className="hint">No projects yet. Create one to get started.</p>
         )}
 
         {listing && (
           <p className="hint small">
-            תיקיית העבודה: <span className="mono">{listing.workspace}</span>
+            Workspace: <span className="mono">{listing.workspace}</span>
           </p>
         )}
       </section>
 
       <section className="panel editor">
-        {!project && <p className="hint">בחר פרויקט מהרשימה או צור פרויקט חדש.</p>}
+        {!project && <p className="hint">Pick a project from the list, or create a new one.</p>}
 
         {project && (
           <>
             <div className="editor-header">
               <h2>
-                עריכת פרויקט
-                {dirty && <span className="badge warn">שינויים לא שמורים</span>}
+                Edit project
+                {dirty && <span className="badge warn">Unsaved changes</span>}
               </h2>
               <div className="row">
                 <button
@@ -285,10 +340,10 @@ export default function ProjectsScreen() {
                   onClick={() => void handleSave()}
                   disabled={busy || !dirty}
                 >
-                  שמור שינויים
+                  Save changes
                 </button>
                 <button type="button" onClick={handleRevert} disabled={busy || !dirty}>
-                  בטל שינויים
+                  Discard changes
                 </button>
               </div>
             </div>
@@ -300,7 +355,7 @@ export default function ProjectsScreen() {
             )}
 
             <label className="field">
-              <span>שם הפרויקט</span>
+              <span>Project name</span>
               <input
                 type="text"
                 value={draftName}
@@ -309,35 +364,54 @@ export default function ProjectsScreen() {
             </label>
 
             <p className="hint small">
-              נוצר {formatDate(project.created_at)} · נשמר לאחרונה{' '}
-              {formatDate(project.updated_at)} · תיקייה:{' '}
+              Created {formatDate(project.created_at)} · last saved{' '}
+              {formatDate(project.updated_at)} · folder:{' '}
               <span className="mono">{project.directory}</span>
             </p>
 
-            <h3>חומרי גלם ({draftSources.length})</h3>
+            <div className="editor-header">
+              <h3>Footage ({draftSources.length})</h3>
+              <button
+                type="button"
+                className="primary"
+                disabled={busy}
+                onClick={() => void handleAddFolder()}
+              >
+                {busy ? 'Working…' : 'Upload folder…'}
+              </button>
+            </div>
+
             <p className="hint">
-              קובצי הווידאו נשארים במיקומם המקורי ומקושרים לפי נתיב מלא. Video Factory
-              לא מעתיק, מזיז או משנה אותם. הדבק נתיב מלא, למשל{' '}
-              <span className="mono">C:\Videos\take 1.mp4</span> (אפשר גם עם מרכאות,
-              כפי ש־Explorer מעתיק).
+              Opens a folder picker and loads every video file in the folder you
+              choose, ordered by file name. Files that are not video are skipped.
+              Your clips stay where they are and are only referenced by full path:
+              Video Factory never copies, moves or changes them.
             </p>
 
-            <form className="row" onSubmit={handleAddSource}>
-              <input
-                type="text"
-                value={pathInput}
-                placeholder="C:\Videos\take 1.mp4"
-                onChange={(event) => setPathInput(event.target.value)}
-              />
-              <button type="submit" disabled={busy}>
-                הוסף קובץ
-              </button>
-            </form>
+            {needsPathFallback && (
+              <form
+                className="row"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void handleAddFolder(pathInput)
+                }}
+              >
+                <input
+                  type="text"
+                  value={pathInput}
+                  placeholder="C:\Videos\shoot-01"
+                  onChange={(event) => setPathInput(event.target.value)}
+                />
+                <button type="submit" disabled={busy || !pathInput.trim()}>
+                  Add this folder
+                </button>
+              </form>
+            )}
 
             {missingCount > 0 && (
               <p className="message error">
-                {missingCount} קבצים לא נמצאו במיקומם. הפרויקט נפתח כרגיל; אפשר להסיר
-                את ההפניה או להחזיר את הקובץ למקומו.
+                {missingCount} files were not found where they were. The project still
+                opens; remove the reference or put the file back.
               </p>
             )}
 
@@ -348,7 +422,7 @@ export default function ProjectsScreen() {
                   <span className="details">
                     <span className="filename">
                       {source.filename}
-                      {!source.exists && <span className="badge bad">קובץ חסר</span>}
+                      {!source.exists && <span className="badge bad">File missing</span>}
                       {source.exists && source.size_bytes !== null && (
                         <span className="small"> · {formatSize(source.size_bytes)}</span>
                       )}
@@ -360,7 +434,7 @@ export default function ProjectsScreen() {
                       type="button"
                       onClick={() => move(index, -1)}
                       disabled={index === 0}
-                      title="העבר למעלה"
+                      title="Move up"
                     >
                       ↑
                     </button>
@@ -368,12 +442,12 @@ export default function ProjectsScreen() {
                       type="button"
                       onClick={() => move(index, 1)}
                       disabled={index === draftSources.length - 1}
-                      title="העבר למטה"
+                      title="Move down"
                     >
                       ↓
                     </button>
                     <button type="button" onClick={() => remove(source.id)}>
-                      הסר
+                      Remove
                     </button>
                   </span>
                 </li>
@@ -381,7 +455,7 @@ export default function ProjectsScreen() {
             </ol>
 
             {draftSources.length === 0 && (
-              <p className="hint">אין עדיין חומרי גלם בפרויקט.</p>
+              <p className="hint">No footage in this project yet.</p>
             )}
 
             <CuttingPanel

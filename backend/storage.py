@@ -158,30 +158,30 @@ def read_json(path: Path) -> Any:
 
 def validate_project_name(raw_name: Any) -> str:
     if not isinstance(raw_name, str):
-        raise ProjectError("שם הפרויקט חייב להיות טקסט.")
+        raise ProjectError("The project name must be text.")
 
     name = unicodedata.normalize("NFC", raw_name).strip()
 
     if not name:
-        raise ProjectError("שם הפרויקט לא יכול להיות ריק.")
+        raise ProjectError("The project name cannot be empty.")
     if len(name) > MAX_NAME_LENGTH:
-        raise ProjectError("שם הפרויקט ארוך מדי (עד %d תווים)." % MAX_NAME_LENGTH)
+        raise ProjectError("The project name is too long (up to %d characters)." % MAX_NAME_LENGTH)
     if any(ord(character) < 32 or ord(character) == 127 for character in name):
-        raise ProjectError("שם הפרויקט מכיל תווים לא חוקיים.")
+        raise ProjectError("The project name contains invalid characters.")
 
     return name
 
 
 def validate_project_id(raw_id: Any) -> str:
     if not isinstance(raw_id, str) or not _PROJECT_ID_PATTERN.match(raw_id):
-        raise ProjectNotFound("מזהה פרויקט לא חוקי.")
+        raise ProjectNotFound("Invalid project id.")
     return raw_id
 
 
 def validate_source_path(raw_path: Any) -> str:
     """Normalise and check a user-entered absolute path to a local video file."""
     if not isinstance(raw_path, str):
-        raise ProjectError("נתיב הקובץ חייב להיות טקסט.")
+        raise ProjectError("The file path must be text.")
 
     path_text = raw_path.strip()
     # Windows Explorer's "Copy as path" wraps the path in double quotes.
@@ -189,26 +189,26 @@ def validate_source_path(raw_path: Any) -> str:
         path_text = path_text[1:-1].strip()
 
     if not path_text:
-        raise ProjectError("יש להזין נתיב קובץ.")
+        raise ProjectError("Enter a file path.")
     if len(path_text) > MAX_PATH_LENGTH:
-        raise ProjectError("נתיב הקובץ ארוך מדי.")
+        raise ProjectError("The file path is too long.")
     if "\x00" in path_text:
-        raise ProjectError("נתיב הקובץ מכיל תווים לא חוקיים.")
+        raise ProjectError("The file path contains invalid characters.")
 
     candidate = Path(path_text)
     if not candidate.is_absolute():
-        raise ProjectError("יש להזין נתיב מלא, למשל C:\\Videos\\take1.mp4")
+        raise ProjectError("Enter a full path, for example C:\\Videos\\take1.mp4")
 
     if candidate.suffix.lower() not in VIDEO_EXTENSIONS:
         allowed = ", ".join(sorted(VIDEO_EXTENSIONS))
-        raise ProjectError("סוג הקובץ אינו נתמך. סיומות נתמכות: " + allowed)
+        raise ProjectError("Unsupported file type. Supported extensions: " + allowed)
 
     normalised = os.path.normpath(path_text)
 
     if not os.path.exists(normalised):
-        raise ProjectError("הקובץ לא נמצא: " + normalised)
+        raise ProjectError("File not found: " + normalised)
     if not os.path.isfile(normalised):
-        raise ProjectError("הנתיב אינו מצביע על קובץ: " + normalised)
+        raise ProjectError("The path does not point to a file: " + normalised)
 
     return normalised
 
@@ -230,36 +230,36 @@ def project_file(project_id: str) -> Path:
 def _parse_project(data: Any, project_id: str) -> dict:
     """Validate the on-disk shape and return a normalised project dict."""
     if not isinstance(data, dict):
-        raise ProjectFileInvalid("קובץ הפרויקט פגום: המבנה אינו תקין.")
+        raise ProjectFileInvalid("The project file is corrupt: its structure is invalid.")
 
     schema_version = data.get("schema_version")
     if not isinstance(schema_version, int) or isinstance(schema_version, bool):
-        raise ProjectFileInvalid("קובץ הפרויקט פגום: חסרה גרסת סכמה.")
+        raise ProjectFileInvalid("The project file is corrupt: the schema version is missing.")
     if schema_version > SCHEMA_VERSION:
         raise ProjectFileInvalid(
-            "קובץ הפרויקט נוצר בגרסה חדשה יותר (%d) ואינו נתמך בגרסה זו (%d)."
+            "The project file was written by a newer version (%d) and is not supported by this one (%d)."
             % (schema_version, SCHEMA_VERSION)
         )
 
     name = data.get("name")
     if not isinstance(name, str) or not name.strip():
-        raise ProjectFileInvalid("קובץ הפרויקט פגום: שם הפרויקט חסר.")
+        raise ProjectFileInvalid("The project file is corrupt: the project name is missing.")
 
     raw_sources = data.get("sources", [])
     if not isinstance(raw_sources, list):
-        raise ProjectFileInvalid("קובץ הפרויקט פגום: רשימת המקורות אינה תקינה.")
+        raise ProjectFileInvalid("The project file is corrupt: the source list is invalid.")
 
     sources = []
     for entry in raw_sources:
         if not isinstance(entry, dict):
-            raise ProjectFileInvalid("קובץ הפרויקט פגום: מקור וידאו אינו תקין.")
+            raise ProjectFileInvalid("The project file is corrupt: a source entry is invalid.")
 
         source_id = entry.get("id")
         path = entry.get("path")
         if not isinstance(source_id, str) or not source_id:
-            raise ProjectFileInvalid("קובץ הפרויקט פגום: למקור וידאו חסר מזהה.")
+            raise ProjectFileInvalid("The project file is corrupt: a source entry has no id.")
         if not isinstance(path, str) or not path:
-            raise ProjectFileInvalid("קובץ הפרויקט פגום: למקור וידאו חסר נתיב.")
+            raise ProjectFileInvalid("The project file is corrupt: a source entry has no path.")
 
         sources.append(
             {
@@ -292,15 +292,15 @@ def read_project(project_id: str) -> dict:
     try:
         raw = read_text_resilient(path)
     except FileNotFoundError as error:
-        raise ProjectNotFound("הפרויקט לא נמצא.") from error
+        raise ProjectNotFound("Project not found.") from error
     except OSError as error:
-        raise ProjectFileInvalid("לא ניתן לקרוא את קובץ הפרויקט: %s" % error) from error
+        raise ProjectFileInvalid("The project file cannot be read: %s" % error) from error
 
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as error:
         raise ProjectFileInvalid(
-            "קובץ הפרויקט אינו JSON תקין (שורה %d)." % error.lineno
+            "The project file is not valid JSON (line %d)." % error.lineno
         ) from error
 
     return _parse_project(data, project_id)
@@ -330,7 +330,7 @@ def write_project(project: dict) -> dict:
     try:
         write_json_atomic(directory / PROJECT_FILE_NAME, document)
     except OSError as error:
-        raise ProjectError("שמירת הפרויקט נכשלה: %s" % error, status_code=500) from error
+        raise ProjectError("Saving the project failed: %s" % error, status_code=500) from error
 
     return read_project(project_id)
 
@@ -409,12 +409,58 @@ def add_source(project_id: str, raw_path: Any) -> dict:
 
     for existing in project["sources"]:
         if os.path.normcase(existing["path"]) == os.path.normcase(path):
-            raise ProjectError("הקובץ כבר קיים בפרויקט.", status_code=409)
+            raise ProjectError("That file is already in the project.", status_code=409)
 
     project["sources"].append(
         {"id": uuid.uuid4().hex, "path": path, "added_at": _now()}
     )
     return write_project(project)
+
+
+def add_sources(project_id: str, paths: list[str]) -> dict:
+    """Add several files in one write, keeping the given order.
+
+    Used by the folder picker, where a dozen takes arrive at once. A file that
+    is already in the project, or that fails validation, is reported rather
+    than aborting the rest: a folder added twice should quietly add what is new.
+    """
+    project = read_project(project_id)
+
+    seen = {os.path.normcase(source["path"]) for source in project["sources"]}
+    added: list[str] = []
+    duplicates: list[str] = []
+    failed: list[dict] = []
+
+    for raw_path in paths:
+        try:
+            path = validate_source_path(raw_path)
+        except ProjectError as error:
+            failed.append(
+                {"filename": os.path.basename(str(raw_path)), "error": error.message}
+            )
+            continue
+
+        key = os.path.normcase(path)
+        if key in seen:
+            duplicates.append(os.path.basename(path))
+            continue
+
+        seen.add(key)
+        project["sources"].append(
+            {"id": uuid.uuid4().hex, "path": path, "added_at": _now()}
+        )
+        added.append(os.path.basename(path))
+
+    # Nothing new: leave the file alone rather than bumping `updated_at`, which
+    # would needlessly mark every existing plan as outdated.
+    saved = write_project(project) if added else project
+
+    return {
+        "project": describe_project(saved),
+        "added": added,
+        "duplicates": duplicates,
+        "failed": failed,
+    }
 
 
 def save_project(project_id: str, name: Any, source_ids: Any) -> dict:
@@ -427,7 +473,7 @@ def save_project(project_id: str, name: Any, source_ids: Any) -> dict:
     validated_name = validate_project_name(name)
 
     if not isinstance(source_ids, list):
-        raise ProjectError("רשימת המקורות אינה תקינה.")
+        raise ProjectError("The source list is invalid.")
 
     known = {source["id"]: source for source in project["sources"]}
     seen: set[str] = set()
@@ -435,9 +481,9 @@ def save_project(project_id: str, name: Any, source_ids: Any) -> dict:
 
     for source_id in source_ids:
         if not isinstance(source_id, str) or source_id not in known:
-            raise ProjectError("רשימת המקורות מפנה לקובץ שאינו קיים בפרויקט.")
+            raise ProjectError("The source list refers to a file that is not in the project.")
         if source_id in seen:
-            raise ProjectError("רשימת המקורות מכילה כפילויות.")
+            raise ProjectError("The source list contains duplicates.")
         seen.add(source_id)
         ordered.append(known[source_id])
 

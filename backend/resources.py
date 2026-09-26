@@ -29,8 +29,9 @@ MEDIA_TYPE_VIDEO = "video"
 # Stated in the catalog itself so the model is never tempted to guess content
 # from a filename, and so the user can see that it was told not to.
 CONTENT_NOTE = (
-    "שמות הקבצים אינם מעידים על תוכן הווידאו. המערכת אינה מנתחת, מתמללת או "
-    "צופה בקבצים, ולכן אין מידע על מה שמופיע או נאמר בהם."
+    "File names say nothing about what is in the video. The system does not "
+    "analyse, transcribe or watch the files, so there is no information about "
+    "what appears or is said in them."
 )
 
 
@@ -49,12 +50,12 @@ def build_catalog(project: dict) -> dict:
                 "size_bytes": source["size_bytes"],
                 "added_at": source["added_at"],
                 "description": (
-                    "חומר גלם מס' %d בפרויקט. %s"
+                    "Source footage #%d in the project. %s"
                     % (
                         index + 1,
-                        "הקובץ זמין."
+                        "The file is available."
                         if source["exists"]
-                        else "הקובץ אינו נמצא כרגע במיקומו.",
+                        else "The file is not currently where it was.",
                     )
                 ),
             }

@@ -121,7 +121,7 @@ def run(
     cannot mistake an abandoned run for a finished one.
     """
     if not argv or not isinstance(argv[0], str):
-        raise ProcessStartFailed("פקודת הרצה לא תקינה.")
+        raise ProcessStartFailed("Invalid command.")
 
     try:
         process = subprocess.Popen(
@@ -134,11 +134,11 @@ def run(
         )
     except FileNotFoundError as error:
         raise ProcessStartFailed(
-            'הכלי "%s" לא נמצא ב־PATH. בדוק את לשונית "כלים".' % argv[0]
+            'Tool "%s" was not found on PATH. Check the "Tools" tab.' % argv[0]
         ) from error
     except OSError as error:
         raise ProcessStartFailed(
-            'לא ניתן להריץ את "%s": %s' % (argv[0], error)
+            '"%s" could not be run: %s' % (argv[0], error)
         ) from error
 
     captured: list[str] = []
@@ -210,7 +210,7 @@ def run(
 
     if timed_out:
         raise ProcessStartFailed(
-            'ההרצה של "%s" נמשכה מעבר למגבלת הזמן ונעצרה.' % argv[0]
+            '"%s" ran past its time limit and was stopped.' % argv[0]
         )
 
     return ProcessResult(exit_code, output, output_truncated)

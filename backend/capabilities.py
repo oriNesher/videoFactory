@@ -28,8 +28,8 @@ KIND_DIAGNOSTIC = "diagnostic"
 KIND_EDITING = "editing"
 
 KIND_LABELS = {
-    KIND_DIAGNOSTIC: "אבחון",
-    KIND_EDITING: "עריכת וידאו",
+    KIND_DIAGNOSTIC: "diagnostic",
+    KIND_EDITING: "video editing",
 }
 
 TOOL_CHECK = "diagnostics.tool_check"
@@ -74,7 +74,7 @@ def _cut_parameters() -> dict:
             "min": spec["min"],
             "max": spec["max"],
             "unit": spec["unit"],
-            "description": "%s (%s). ברירת מחדל: %s."
+            "description": "%s (%s). Default: %s."
             % (spec["description"], spec["unit"], spec["default"]),
         }
 
@@ -83,7 +83,7 @@ def _cut_parameters() -> dict:
         "required": False,
         "choices": list(cutting.OUTPUT_MODES),
         "default": cutting.DEFAULT_OUTPUT_MODE,
-        "description": "מה להפיק: %s."
+        "description": "What to produce: %s."
         % ", ".join(
             "%s (%s)" % (mode["id"], mode["label"])
             for mode in cutting.OUTPUT_MODES.values()
@@ -98,11 +98,11 @@ CAPABILITIES: dict[str, dict] = {
         "id": TOOL_CHECK,
         "version": 1,
         "kind": KIND_DIAGNOSTIC,
-        "title": "בדיקת כלי עיבוד",
+        "title": "Processing tool check",
         "purpose": (
-            "בודקת אילו כלי עיבוד חיצוניים מותקנים ונגישים דרך ה־PATH ומדווחת "
-            "את הגרסה שלהם. פעולת אבחון בלבד: היא אינה עורכת וידאו, אינה קוראת "
-            "חומרי גלם ואינה כותבת קבצים."
+            "Checks which external processing tools are installed and reachable on "
+            "PATH, and reports their versions. Diagnostic only: it does not edit "
+            "video, read footage or write files."
         ),
         "executable": True,
         "resource_types": [],
@@ -115,7 +115,7 @@ CAPABILITIES: dict[str, dict] = {
                 "default": list(TOOL_NAMES),
                 "min_items": 1,
                 "max_items": len(TOOL_NAMES),
-                "description": "אילו כלים לבדוק. ברירת המחדל: כל הכלים.",
+                "description": "Which tools to check. Default: all of them.",
             }
         },
     },
@@ -123,12 +123,13 @@ CAPABILITIES: dict[str, dict] = {
         "id": CUT_SILENCE,
         "version": 1,
         "kind": KIND_EDITING,
-        "title": "חיתוך שתיקות (Auto-Editor)",
+        "title": "Silence cutting (Auto-Editor)",
         "purpose": (
-            "חותכת שתיקות והפסקות מתוך חומרי גלם לפי עוצמת האודיו, מפיקה קובץ "
-            "MP4 חתוך לכל מקור לפי הסדר שנבחר, ולפי הבקשה גם מחברת אותם לסרטון "
-            "אחד. פועלת מקומית עם Auto-Editor ו־FFmpeg, לא משנה ולא מוחקת את "
-            "קובצי המקור, וכל הרצה כותבת לתיקייה חדשה משלה."
+            "Cuts silence and pauses out of footage by audio loudness, produces one "
+            "trimmed MP4 per source in the chosen order, and on request joins them "
+            "into a single video. Runs locally with Auto-Editor and FFmpeg, never "
+            "changes or deletes the source files, and writes every run to its own "
+            "new directory."
         ),
         "executable": True,
         # Project sources only. Outputs of earlier runs are deliberately not
@@ -138,12 +139,14 @@ CAPABILITIES: dict[str, dict] = {
         "min_resources": 1,
         "parameters": _cut_parameters(),
         "limitations": [
-            "החיתוך מבוסס אודיו בלבד: קובץ ללא מסלול אודיו נדחה בבדיקה מראש.",
-            "חיבור לסרטון אחד דורש שכל הקטעים יהיו באותם ממדים וכיוון; ממדים "
-            "מעורבים מדווחים כמגבלה ולא נמתחים.",
-            "אין כרגע עריכה ידנית של גבולות החיתוך ואין מפת חיתוכים מלאה "
-            "ממקור לפלט.",
-            "הפלט תמיד MP4 (H.264 + AAC) בממדי המקור.",
+            "Cutting is audio-driven only: a file with no audio track is rejected "
+            "up front.",
+            "Joining into one video requires every clip to share the same "
+            "dimensions and orientation; mixed dimensions are reported as a "
+            "limitation rather than stretched.",
+            "There is no manual editing of cut boundaries yet, and no full "
+            "source-to-output cut map.",
+            "Output is always MP4 (H.264 + AAC) at the source dimensions.",
         ],
     },
 }
@@ -151,11 +154,11 @@ CAPABILITIES: dict[str, dict] = {
 # Areas the user may well ask about, which have no capability yet. This list is
 # text for the model's benefit only — nothing here can be referenced by a plan.
 NOT_YET_SUPPORTED = [
-    "תמלול (Whisper) וכתוביות",
-    "זומים ואפקטים",
-    "B-roll והרכבת שכבות (Remotion)",
-    "מוזיקת רקע ואפקטים קוליים",
-    "ייצוא סופי והקלטה (OBS)",
+    "Transcription (Whisper) and subtitles",
+    "Zooms and effects",
+    "B-roll and layer composition (Remotion)",
+    "Background music and sound effects",
+    "Final export and recording (OBS)",
 ]
 
 
@@ -179,19 +182,19 @@ def catalog() -> dict:
 
 def get_capability(capability_id: Any) -> dict:
     if not isinstance(capability_id, str) or not capability_id:
-        raise CapabilityError("לכל פעולה חייב להיות מזהה יכולת.")
+        raise CapabilityError("Every action must carry a capability id.")
 
     capability = CAPABILITIES.get(capability_id)
     if capability is None:
-        known = ", ".join(sorted(CAPABILITIES)) or "אין כרגע יכולות זמינות"
+        known = ", ".join(sorted(CAPABILITIES)) or "no capabilities are available"
         raise CapabilityError(
-            'היכולת "%s" אינה קיימת במערכת. היכולות הקיימות: %s.'
+            'Capability "%s" does not exist. Available capabilities: %s.'
             % (capability_id, known)
         )
 
     if not capability.get("executable"):
         raise CapabilityError(
-            'היכולת "%s" רשומה אך אינה זמינה להרצה כרגע.' % capability_id
+            'Capability "%s" is registered but not runnable right now.' % capability_id
         )
 
     return capability
@@ -206,20 +209,20 @@ def _fail(action_label: str, message: str) -> CapabilityError:
 
 def _validate_string(spec: dict, name: str, value: Any, action_label: str) -> str:
     if not isinstance(value, str):
-        raise _fail(action_label, 'הפרמטר "%s" חייב להיות טקסט.' % name)
+        raise _fail(action_label, 'Parameter "%s" must be text.' % name)
 
     text = value.strip()
     max_length = spec.get("max_length", 500)
     if len(text) > max_length:
         raise _fail(
-            action_label, 'הפרמטר "%s" ארוך מדי (עד %d תווים).' % (name, max_length)
+            action_label, 'Parameter "%s" is too long (up to %d characters).' % (name, max_length)
         )
 
     choices = spec.get("choices")
     if choices is not None and text not in choices:
         raise _fail(
             action_label,
-            'הערך של "%s" אינו נתמך. ערכים אפשריים: %s.' % (name, ", ".join(choices)),
+            'The value of "%s" is not supported. Allowed values: %s.' % (name, ", ".join(choices)),
         )
 
     return text
@@ -228,41 +231,41 @@ def _validate_string(spec: dict, name: str, value: Any, action_label: str) -> st
 def _validate_number(spec: dict, name: str, value: Any, action_label: str) -> Any:
     if spec["type"] == "integer":
         if not isinstance(value, int) or isinstance(value, bool):
-            raise _fail(action_label, 'הפרמטר "%s" חייב להיות מספר שלם.' % name)
+            raise _fail(action_label, 'Parameter "%s" must be a whole number.' % name)
     else:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise _fail(action_label, 'הפרמטר "%s" חייב להיות מספר.' % name)
+            raise _fail(action_label, 'Parameter "%s" must be a number.' % name)
 
     minimum = spec.get("min")
     maximum = spec.get("max")
     if minimum is not None and value < minimum:
-        raise _fail(action_label, 'הפרמטר "%s" קטן מהמינימום (%s).' % (name, minimum))
+        raise _fail(action_label, 'Parameter "%s" is below the minimum (%s).' % (name, minimum))
     if maximum is not None and value > maximum:
-        raise _fail(action_label, 'הפרמטר "%s" גדול מהמקסימום (%s).' % (name, maximum))
+        raise _fail(action_label, 'Parameter "%s" is above the maximum (%s).' % (name, maximum))
 
     return value
 
 
 def _validate_string_list(spec: dict, name: str, value: Any, action_label: str) -> list:
     if not isinstance(value, list):
-        raise _fail(action_label, 'הפרמטר "%s" חייב להיות רשימה.' % name)
+        raise _fail(action_label, 'Parameter "%s" must be a list.' % name)
 
     items: list[str] = []
     for entry in value:
         item = _validate_string(spec, name, entry, action_label)
         if item in items:
-            raise _fail(action_label, 'הפרמטר "%s" מכיל ערך כפול: %s.' % (name, item))
+            raise _fail(action_label, 'Parameter "%s" contains a duplicate value: %s.' % (name, item))
         items.append(item)
 
     min_items = spec.get("min_items")
     max_items = spec.get("max_items")
     if min_items is not None and len(items) < min_items:
         raise _fail(
-            action_label, 'הפרמטר "%s" חייב לכלול לפחות %d ערכים.' % (name, min_items)
+            action_label, 'Parameter "%s" must include at least %d values.' % (name, min_items)
         )
     if max_items is not None and len(items) > max_items:
         raise _fail(
-            action_label, 'הפרמטר "%s" יכול לכלול עד %d ערכים.' % (name, max_items)
+            action_label, 'Parameter "%s" can include at most %d values.' % (name, max_items)
         )
 
     return items
@@ -277,32 +280,32 @@ def validate_parameters(capability: dict, raw: Any, action_label: str) -> dict:
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise _fail(action_label, "הפרמטרים של הפעולה אינם תקינים.")
+        raise _fail(action_label, "The action's parameters are invalid.")
 
     specs: dict = capability["parameters"]
     validated: dict = {}
 
     for name in raw:
         if not isinstance(name, str):
-            raise _fail(action_label, "שם פרמטר אינו תקין.")
+            raise _fail(action_label, "A parameter name is invalid.")
         if name.lower() in FORBIDDEN_PARAMETER_KEYS and name not in specs:
             raise _fail(
                 action_label,
-                'הפרמטר "%s" אסור: תוכנית עריכה לא יכולה להכיל פקודות, קוד או '
-                "נתיבים להרצה." % name,
+                'Parameter "%s" is forbidden: an editing plan cannot carry commands, '
+                "code or executable paths." % name,
             )
         if name not in specs:
-            allowed = ", ".join(sorted(specs)) or "אין פרמטרים"
+            allowed = ", ".join(sorted(specs)) or "none"
             raise _fail(
                 action_label,
-                'הפרמטר "%s" אינו מוכר ליכולת הזו. פרמטרים אפשריים: %s.'
+                'Parameter "%s" is not known to this capability. Allowed parameters: %s.'
                 % (name, allowed),
             )
 
     for name, spec in specs.items():
         if name not in raw:
             if spec.get("required"):
-                raise _fail(action_label, 'חסר הפרמטר החובה "%s".' % name)
+                raise _fail(action_label, 'The required parameter "%s" is missing.' % name)
             default = spec.get("default")
             if default is not None:
                 validated[name] = list(default) if isinstance(default, list) else default
@@ -318,13 +321,13 @@ def validate_parameters(capability: dict, raw: Any, action_label: str) -> dict:
         elif kind == "boolean":
             if not isinstance(value, bool):
                 raise _fail(
-                    action_label, 'הפרמטר "%s" חייב להיות כן/לא.' % name
+                    action_label, 'Parameter "%s" must be true or false.' % name
                 )
             validated[name] = value
         elif kind == "string_list":
             validated[name] = _validate_string_list(spec, name, value, action_label)
         else:  # pragma: no cover - a registry mistake, not user input
-            raise _fail(action_label, 'סוג פרמטר לא מוכר עבור "%s".' % name)
+            raise _fail(action_label, 'Unknown parameter type for "%s".' % name)
 
     return validated
 

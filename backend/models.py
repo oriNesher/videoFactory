@@ -23,6 +23,12 @@ class AddSourceRequest(BaseModel):
     path: Any = None
 
 
+class AddSourceDirectoryRequest(BaseModel):
+    """`path` omitted means: open the machine's folder dialog and ask."""
+
+    path: Any = None
+
+
 class SubmitJobRequest(BaseModel):
     type: Any = None
     input: Any = None
