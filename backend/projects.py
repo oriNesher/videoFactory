@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 
-from . import folders, storage
+from . import folders, player, storage
 from .config import get_workspace_root
 from .models import (
     AddSourceRequest,
@@ -84,3 +84,14 @@ def add_source_directory(project_id: str, request: AddSourceDirectoryRequest):
         return {"cancelled": False, **folders.add_directory(project_id, path)}
     except storage.ProjectError as error:
         raise _fail(error) from error
+
+
+@router.post("/{project_id}/sources/{source_id}/open")
+def open_source(project_id: str, source_id: str):
+    """Open one of the project's files in VLC on this machine."""
+    try:
+        player.open_source(project_id, source_id)
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return {"opened": True}

@@ -25,6 +25,7 @@ Already verified on this machine:
 | npm | 11.4.2 |
 | FFmpeg / FFprobe | 8.1.2 (`C:\tools`) |
 | Auto-Editor | 31.3.2 (`C:\tools`) |
+| faster-whisper | in `.venv`, from `requirements.txt` |
 
 FFmpeg, FFprobe and Auto-Editor must be reachable through `PATH`.
 
@@ -290,6 +291,60 @@ failure, not a result.
   one advance the bar at different speeds.
 - **Runs are never pruned.** Delete a run directory by hand to reclaim space.
 
+## Subtitles with Whisper
+
+The in-app replacement for `legacy/Whisper/transcribe_video.bat`, and the step
+after cutting. Every cut run now trims the clips **and merges them into one
+video**; the subtitles are made for that merged video:
+
+1. **Silence cutting** → **Run cut**. The run appears under **Cut runs** in the
+   **Subtitles (Whisper)** section.
+2. Adjust the four line rules below if you like, and **Save settings**.
+3. Press **Create subtitles** on the run. A run cut before merging was
+   automatic has no merged video yet; the same job merges its clips first, in
+   the background. Single clips can still be transcribed from **Show details**.
+4. The job runs in **Background jobs** with a percentage and can be cancelled.
+   When it finishes, the merged video's player shows the subtitles (the CC
+   button) and a **Download SRT** link appears next to **Download**.
+
+The language is always Hebrew, and the model is fixed:
+[ivrit.ai's large-v3-turbo fine-tuned on Hebrew](https://huggingface.co/ivrit-ai/whisper-large-v3-turbo-ct2)
+(`subtitles.MODEL` in `backend/subtitles.py`), which is far more accurate on
+Hebrew than the generic Whisper models at about Medium's speed. Everything
+runs on this computer, on the CPU, with `faster-whisper` (installed by
+`requirements.txt`). The model is downloaded once from Hugging Face (≈ 1.6 GB)
+into `%USERPROFILE%\.cache\huggingface`; after that no network is needed.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Words per line | `5` | The most words on screen at once. |
+| Characters per line | `30` | A longer line is split before it. |
+| Words before a punctuation split | `2` | A line ends at a comma or full stop only once it has this many words. |
+| Split on pause | `0.45` s | A pause at least this long starts a new line. |
+
+These and the transcription recipe (beam size 5, voice-activity filter, word
+timestamps) are the legacy script's. Whisper runs in its own process, so
+**Cancel** stops it immediately and its memory is released afterwards.
+
+Files go into the run's own folder, next to the clips:
+
+```
+…\cuts\<run-id>\combined\combined.mp4   the merged video
+…\cuts\<run-id>\subtitles\
+  combined.srt               UTF-8 with BOM, which Premiere needs for Hebrew
+  combined.transcript.json   every word with its timestamps
+  combined.json              which model and settings made the SRT
+…\cuts\<run-id>\logs\subtitles-combined.log
+```
+
+Merging needs every clip of the run at the same resolution and orientation. If
+they differ, the merge is refused with a message naming each clip's size, and
+the run's clips can still be transcribed one by one.
+
+Transcribing a clip again replaces its SRT only once the new one is complete;
+a failed or cancelled attempt leaves the earlier subtitles in place. Subtitles
+are not available through an AI editing plan yet.
+
 
 ## Tests and build
 
@@ -321,6 +376,7 @@ tools are not on `PATH`, those tests skip rather than fail.
 | Trimmed clips | `…\cuts\<run-id>\clips\NNNN_<take>_trimmed.mp4` |
 | Combined video | `…\cuts\<run-id>\combined\combined.mp4` |
 | Run manifest and tool logs | `…\cuts\<run-id>\manifest.json`, `…\logs\` |
+| Subtitles | `…\cuts\<run-id>\subtitles\<clip-id>.srt` |
 | Exports | `workspace\projects\<project-id>\exports\` |
 | Source footage | **stays where you recorded it** |
 

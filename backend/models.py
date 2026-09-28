@@ -53,3 +53,15 @@ class StartCuttingRunRequest(BaseModel):
     source_ids: Any = None
     settings: Any = None
     output_mode: Any = None
+
+
+class SaveSubtitleSettingsRequest(BaseModel):
+    settings: Any = None
+
+
+class StartSubtitlesRequest(BaseModel):
+    """The model and the language are fixed by the backend, not requested."""
+
+    run_id: Any = None
+    output_ids: Any = None
+    settings: Any = None

@@ -162,6 +162,84 @@ def probe(path: str) -> dict:
     return described
 
 
+# Below this peak the track carries no recoverable sound at all. A silent AAC
+# track measures around -91 dB; real room tone sits far above it.
+SILENT_PEAK_DB = -70.0
+
+# Mean level below which a track holds no *sustained* sound — a noise floor with
+# the occasional transient, not speech. Measured on this machine: a screen
+# recording with no microphone input averaged -65.6 dB while peaking at -34.4,
+# and no threshold produced a usable cut from it. Speech, even recorded quietly,
+# averages well above this.
+NO_SPEECH_MEAN_DB = -55.0
+
+
+def measure_audio_level(path: str) -> dict:
+    """Peak and mean loudness of the audio track, via FFmpeg's `volumedetect`.
+
+    Cheap because video decoding is skipped (`-vn`): a 35-second take measures
+    in about a tenth of a second. Worth doing before every run, because the
+    alternative is discovering that a whole recording was silent only after
+    rendering it.
+
+    Never raises: a level that cannot be measured is reported as unknown rather
+    than blocking a run that might be fine.
+    """
+    unknown = {"max_db": None, "mean_db": None, "peak_ratio": None}
+
+    try:
+        result = subprocess.run(
+            ["ffmpeg.exe", "-hide_banner", "-nostdin", "-vn", "-i", str(path),
+             "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return unknown
+
+    levels: dict = dict(unknown)
+    for line in (result.stderr or "").splitlines():
+        for key, label in (("max_db", "max_volume:"), ("mean_db", "mean_volume:")):
+            if label in line:
+                try:
+                    levels[key] = float(line.split(label, 1)[1].strip().split()[0])
+                except (IndexError, ValueError):
+                    pass
+
+    if levels["max_db"] is not None:
+        # Auto-Editor's threshold is a 0–1 ratio of full scale, so convert.
+        levels["peak_ratio"] = round(10 ** (levels["max_db"] / 20), 6)
+
+    return levels
+
+
+def suggested_threshold(level: dict | None) -> float | None:
+    """A threshold that could plausibly separate speech from silence.
+
+    Based on the *mean* level, not the peak. Speech has to stay above the
+    threshold for a sustained stretch to be kept, so a single loud transient
+    says nothing about where the line should go — a take peaking at 0.019 with
+    a mean of 0.0005 produced nothing at half its peak, which is how this came
+    to be mean-based.
+
+    Returns None when the track has no sustained sound to work with, because
+    inventing a number there sends the user round the loop again.
+    """
+    if not level:
+        return None
+
+    mean_db = level.get("mean_db")
+    if mean_db is None or mean_db <= NO_SPEECH_MEAN_DB:
+        return None
+
+    # A little above the mean: quiet passages fall below it, speech stays over.
+    mean_ratio = 10 ** (mean_db / 20)
+    return max(0.001, min(1.0, round(mean_ratio * 1.5, 4)))
+
+
 def describe_input(path: str, *, require_audio: bool = True) -> dict:
     """Probe a *source* file and refuse it if this mode cannot process it.
 
@@ -192,6 +270,41 @@ def describe_input(path: str, *, require_audio: bool = True) -> dict:
             'The duration of file "%s" cannot be determined. It may be corrupt or still being written.'
             % filename
         )
+
+    described["audio_level"] = None
+
+    if require_audio:
+        level = measure_audio_level(path)
+        described["audio_level"] = level
+        peak = level["max_db"]
+
+        mean = level["mean_db"]
+
+        # An audio track that exists but carries no usable sound is the same
+        # problem as no audio track at all, and has to be said differently: no
+        # threshold can find speech in silence, so advising a lower one would
+        # cost the user a full render to learn nothing.
+        if peak is not None and peak <= SILENT_PEAK_DB:
+            raise MediaError(
+                'File "%s" has an audio track, but it is completely silent '
+                "(peak %.1f dB). Audio-driven cutting has nothing to detect in "
+                "it — this usually means the recording captured no microphone "
+                "input. Lowering the audio threshold cannot help. Use a take "
+                "with real sound, or remove this one from the selection."
+                % (filename, peak)
+            )
+
+        # Sound, but no *sustained* sound: a noise floor with the odd transient.
+        if mean is not None and mean <= NO_SPEECH_MEAN_DB:
+            raise MediaError(
+                'File "%s" has an audio track with no speech in it: it averages '
+                "%.1f dB and only peaks at %.1f dB, which is a noise floor "
+                "rather than a voice. No audio threshold can separate speech "
+                "from silence here. This is what a screen or camera recording "
+                "looks like when the microphone was not captured — check the "
+                "recording's audio input and re-record, or remove this file "
+                "from the selection." % (filename, mean, peak if peak is not None else 0.0)
+            )
 
     return described
 

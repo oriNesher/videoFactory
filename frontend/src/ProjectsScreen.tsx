@@ -4,6 +4,7 @@ import {
   createProject,
   listProjects,
   loadProject,
+  openSourceInVlc,
   saveProject,
 } from './api'
 import CuttingPanel from './CuttingPanel'
@@ -13,17 +14,11 @@ import type { Project, ProjectListing, SourceMedia } from './types'
 
 type Message = { kind: 'ok' | 'error'; text: string } | null
 
-function formatDate(value: string): string {
-  if (!value) return '—'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('en-US')
-}
-
-function formatSize(bytes: number | null): string {
-  if (bytes === null) return ''
-  const megabytes = bytes / (1024 * 1024)
-  if (megabytes >= 1024) return `${(megabytes / 1024).toFixed(2)} GB`
-  return `${megabytes.toFixed(1)} MB`
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return ''
+  const whole = Math.round(seconds)
+  const minutes = Math.floor(whole / 60)
+  return `${minutes}:${String(whole % 60).padStart(2, '0')}`
 }
 
 function sameOrder(a: SourceMedia[], b: SourceMedia[]): boolean {
@@ -38,7 +33,6 @@ export default function ProjectsScreen() {
   const [createMessage, setCreateMessage] = useState<Message>(null)
 
   const [project, setProject] = useState<Project | null>(null)
-  const [draftName, setDraftName] = useState('')
   const [draftSources, setDraftSources] = useState<SourceMedia[]>([])
 
   // Only used by the fallback below, which appears if the native folder dialog
@@ -57,20 +51,24 @@ export default function ProjectsScreen() {
 
   const dirty =
     project !== null &&
-    (draftName !== project.name || !sameOrder(draftSources, project.sources))
+    !sameOrder(draftSources, project.sources)
 
   const refreshListing = useCallback(async () => {
     try {
       setListing(await listProjects())
       setListError('')
     } catch (caught) {
-      setListError(caught instanceof Error ? caught.message : 'Loading the project list failed.')
+      setListError(caught instanceof Error ? caught.message : 'Loading the video list failed.')
     }
   }, [])
 
   useEffect(() => {
     void refreshListing()
   }, [refreshListing])
+
+  useEffect(() => {
+    document.title = project ? `${project.name} video` : 'Video Factory'
+  }, [project])
 
   // Browser-level guard, on top of the in-app confirmation below.
   useEffect(() => {
@@ -86,14 +84,13 @@ export default function ProjectsScreen() {
 
   function adopt(loaded: Project) {
     setProject(loaded)
-    setDraftName(loaded.name)
     setDraftSources(loaded.sources)
   }
 
   function confirmDiscard(): boolean {
     if (!dirty) return true
     return window.confirm(
-      'There are unsaved changes in the current project. Leave without saving?',
+      'There are unsaved changes in the current video. Leave without saving?',
     )
   }
 
@@ -106,13 +103,13 @@ export default function ProjectsScreen() {
       const created = await createProject(newName)
       adopt(created)
       setNewName('')
-      setCreateMessage({ kind: 'ok', text: `Project "${created.name}" was created.` })
+      setCreateMessage({ kind: 'ok', text: `Video "${created.name}" was created.` })
       setMessage(null)
       await refreshListing()
     } catch (caught) {
       setCreateMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'Creating the project failed.',
+        text: caught instanceof Error ? caught.message : 'Creating the video failed.',
       })
     } finally {
       setBusy(false)
@@ -131,7 +128,7 @@ export default function ProjectsScreen() {
     } catch (caught) {
       setMessage({
         kind: 'error',
-        text: caught instanceof Error ? caught.message : 'Opening the project failed.',
+        text: caught instanceof Error ? caught.message : 'Opening the video failed.',
       })
     } finally {
       setBusy(false)
@@ -184,7 +181,7 @@ export default function ProjectsScreen() {
       const added = result.added ?? []
       const notes: string[] = []
       if (result.duplicates?.length) {
-        notes.push(`${result.duplicates.length} already in the project`)
+        notes.push(`${result.duplicates.length} already in the video`)
       }
       if (result.ignored?.length) {
         notes.push(`${result.ignored.length} non-video files ignored`)
@@ -217,6 +214,17 @@ export default function ProjectsScreen() {
     }
   }
 
+  async function handleOpenInVlc(sourceId: string) {
+    try {
+      await openSourceInVlc(project!.id, sourceId)
+    } catch (caught) {
+      setMessage({
+        kind: 'error',
+        text: caught instanceof Error ? caught.message : 'Opening VLC failed.',
+      })
+    }
+  }
+
   function move(index: number, delta: number) {
     const target = index + delta
     if (target < 0 || target >= draftSources.length) return
@@ -237,11 +245,11 @@ export default function ProjectsScreen() {
     try {
       const saved = await saveProject(
         project.id,
-        draftName,
+        project.name,
         draftSources.map((source) => source.id),
       )
       adopt(saved)
-      setMessage({ kind: 'ok', text: `Saved at ${formatDate(saved.updated_at)}.` })
+      setMessage({ kind: 'ok', text: 'Saved.' })
       await refreshListing()
     } catch (caught) {
       setMessage({
@@ -265,13 +273,13 @@ export default function ProjectsScreen() {
   return (
     <div className="projects">
       <section className="panel sidebar">
-        <h2>Projects</h2>
+        <h2>Videos</h2>
 
         <form className="row" onSubmit={handleCreate}>
           <input
             type="text"
             value={newName}
-            placeholder="New project name"
+            placeholder="New video name"
             onChange={(event) => setNewName(event.target.value)}
           />
           <button type="submit" className="primary" disabled={busy}>
@@ -299,8 +307,8 @@ export default function ProjectsScreen() {
                 <span className="entry-name">{entry.name}</span>
                 <span className="small">
                   {entry.error
-                    ? `Corrupt project file: ${entry.error}`
-                    : `${entry.source_count} sources · updated ${formatDate(entry.updated_at)}`}
+                    ? `Corrupt video file: ${entry.error}`
+                    : `${entry.source_count} sources`}
                 </span>
                 {entry.missing_source_count > 0 && (
                   <span className="badge bad">
@@ -313,24 +321,18 @@ export default function ProjectsScreen() {
         </ul>
 
         {listing && listing.projects.length === 0 && (
-          <p className="hint">No projects yet. Create one to get started.</p>
-        )}
-
-        {listing && (
-          <p className="hint small">
-            Workspace: <span className="mono">{listing.workspace}</span>
-          </p>
+          <p className="hint">No videos yet. Create one to get started.</p>
         )}
       </section>
 
       <section className="panel editor">
-        {!project && <p className="hint">Pick a project from the list, or create a new one.</p>}
+        {!project && <p className="hint">Pick a video from the list, or create a new one.</p>}
 
         {project && (
           <>
             <div className="editor-header">
               <h2>
-                Edit project
+                {project.name} video
                 {dirty && <span className="badge warn">Unsaved changes</span>}
               </h2>
               <div className="row">
@@ -354,21 +356,6 @@ export default function ProjectsScreen() {
               </p>
             )}
 
-            <label className="field">
-              <span>Project name</span>
-              <input
-                type="text"
-                value={draftName}
-                onChange={(event) => setDraftName(event.target.value)}
-              />
-            </label>
-
-            <p className="hint small">
-              Created {formatDate(project.created_at)} · last saved{' '}
-              {formatDate(project.updated_at)} · folder:{' '}
-              <span className="mono">{project.directory}</span>
-            </p>
-
             <div className="editor-header">
               <h3>Footage ({draftSources.length})</h3>
               <button
@@ -380,13 +367,6 @@ export default function ProjectsScreen() {
                 {busy ? 'Working…' : 'Upload folder…'}
               </button>
             </div>
-
-            <p className="hint">
-              Opens a folder picker and loads every video file in the folder you
-              choose, ordered by file name. Files that are not video are skipped.
-              Your clips stay where they are and are only referenced by full path:
-              Video Factory never copies, moves or changes them.
-            </p>
 
             {needsPathFallback && (
               <form
@@ -410,8 +390,7 @@ export default function ProjectsScreen() {
 
             {missingCount > 0 && (
               <p className="message error">
-                {missingCount} files were not found where they were. The project still
-                opens; remove the reference or put the file back.
+                {missingCount} files are missing. Remove them or put them back.
               </p>
             )}
 
@@ -423,13 +402,24 @@ export default function ProjectsScreen() {
                     <span className="filename">
                       {source.filename}
                       {!source.exists && <span className="badge bad">File missing</span>}
-                      {source.exists && source.size_bytes !== null && (
-                        <span className="small"> · {formatSize(source.size_bytes)}</span>
+                      {source.exists && source.duration_seconds != null && (
+                        <span className="small mono">
+                          {' '}
+                          · {formatDuration(source.duration_seconds)}
+                        </span>
                       )}
                     </span>
-                    <span className="mono small path">{source.path}</span>
                   </span>
                   <span className="row">
+                    <button
+                      type="button"
+                      className="vlc"
+                      onClick={() => void handleOpenInVlc(source.id)}
+                      disabled={!source.exists}
+                      title="Open in VLC"
+                    >
+                      VLC
+                    </button>
                     <button
                       type="button"
                       onClick={() => move(index, -1)}
@@ -455,11 +445,11 @@ export default function ProjectsScreen() {
             </ol>
 
             {draftSources.length === 0 && (
-              <p className="hint">No footage in this project yet.</p>
+              <p className="hint">No footage yet.</p>
             )}
 
             <CuttingPanel
-              key={project.id}
+              key={`cutting-${project.id}`}
               project={project}
               refreshToken={plansRefresh}
               onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
@@ -472,7 +462,7 @@ export default function ProjectsScreen() {
             />
 
             <PlanPanel
-              key={project.id}
+              key={`plan-${project.id}`}
               project={project}
               refreshToken={plansRefresh}
               onJobSubmitted={() => setJobsRefresh((value) => value + 1)}

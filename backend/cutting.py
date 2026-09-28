@@ -87,7 +87,8 @@ OUTPUT_MODES = {
     },
 }
 
-DEFAULT_OUTPUT_MODE = MODE_BOTH
+# The interface no longer offers a choice: one trimmed clip per source.
+DEFAULT_OUTPUT_MODE = MODE_CLIPS
 
 # --- the five cut settings ---------------------------------------------------
 #
@@ -103,11 +104,10 @@ SETTINGS_SPEC: dict[str, dict] = {
         "min": 0.0,
         "max": 1.0,
         "step": 0.005,
-        "unit": "loudness ratio (0-1)",
+        "unit": "0–1",
         "label": "Audio threshold",
         "description": (
-            "How loud audio has to be to count as speech. 0.04 = 4% of peak "
-            "loudness. A lower value keeps more audio; a higher value cuts more."
+            "How loud counts as speech. Higher cuts more."
         ),
         "maps_to": "--edit audio:threshold=",
     },
@@ -118,10 +118,9 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 10.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Margin before speech",
+        "label": "Margin before",
         "description": (
-            "How much to keep before detected speech starts, so the first syllable "
-            "is not clipped."
+            "Extra time kept before each spoken part."
         ),
         "maps_to": "--margin (first value)",
     },
@@ -132,10 +131,9 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 10.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Margin after speech",
+        "label": "Margin after",
         "description": (
-            "How much to keep after detected speech ends. A generous value here "
-            "keeps sentences from feeling chopped off."
+            "Extra time kept after each spoken part."
         ),
         "maps_to": "--margin (second value)",
     },
@@ -146,10 +144,9 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 30.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Minimum silence to cut",
+        "label": "Minimum silence",
         "description": (
-            "Silence shorter than this is never cut. A lower value means more "
-            "aggressive cutting, because short pauses go too."
+            "Shorter pauses are kept."
         ),
         "maps_to": "--smooth (MINCUT)",
     },
@@ -160,10 +157,9 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 30.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Minimum speech to keep",
+        "label": "Minimum speech",
         "description": (
-            "A speech segment shorter than this is treated as noise and removed. "
-            "A higher value means more aggressive cutting."
+            "Shorter sounds are cut."
         ),
         "maps_to": "--smooth (MINCLIP)",
     },
@@ -239,7 +235,6 @@ def settings_catalog() -> dict:
             {"name": name, **{k: v for k, v in spec.items()}}
             for name, spec in SETTINGS_SPEC.items()
         ],
-        "output_modes": [dict(mode) for mode in OUTPUT_MODES.values()],
         "max_sources_per_run": MAX_SOURCES_PER_RUN,
     }
 
@@ -423,6 +418,10 @@ def build_job_input(project_id: str, raw: Any) -> dict:
                 "duration_seconds": described["duration_seconds"],
                 "video": described["video"],
                 "audio": described["audio"],
+                # Measured peak and mean loudness. Recorded so that a clip which
+                # comes back empty can be explained with a number instead of a
+                # guess, and so a quiet take is visible in the manifest.
+                "audio_level": described.get("audio_level"),
             }
         )
 
@@ -432,6 +431,22 @@ def build_job_input(project_id: str, raw: Any) -> dict:
         "source_ids": source_ids,
         "sources": snapshot,
     }
+
+
+def has_merged_video(manifest: dict) -> bool:
+    combined = manifest.get("combined")
+    return isinstance(combined, dict) and combined.get("status") == CLIP_SUCCEEDED
+
+
+def check_mergeable(manifest: dict) -> None:
+    """Refuse, with a reason, a run whose clips cannot become one video now."""
+    if manifest.get("status") not in (RUN_SUCCEEDED, RUN_FAILED):
+        raise CuttingError("This run is still cutting. Wait for it to finish.")
+
+    if not any(
+        clip.get("status") == CLIP_SUCCEEDED for clip in manifest.get("clips") or []
+    ):
+        raise CuttingError("This run produced no clips, so there is nothing to merge.")
 
 
 # --- command construction ---------------------------------------------------
@@ -787,7 +802,7 @@ def generated_resources(project_id: str) -> list[dict]:
             continue
 
         run_id = manifest["run_id"]
-        mode = manifest.get("output_mode", DEFAULT_OUTPUT_MODE)
+        mode = manifest.get("output_mode", MODE_BOTH)
 
         if mode in (MODE_CLIPS, MODE_BOTH):
             for clip in manifest.get("clips") or []:

@@ -19,7 +19,7 @@ import urllib.parse
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import cutting, jobs, job_tasks, storage
+from . import cutting, jobs, job_tasks, player, storage, subtitles
 from .models import SaveCuttingSettingsRequest, StartCuttingRunRequest
 
 router = APIRouter(prefix="/projects/{project_id}/cutting", tags=["cutting"])
@@ -98,13 +98,38 @@ def list_cutting_runs(project_id: str):
     try:
         storage.read_project(project_id)
         runs = cutting.list_runs(project_id)
+        active = _active_run_jobs(project_id)
     except storage.ProjectError as error:
         raise _fail(error) from error
 
     return {
         "project_id": project_id,
-        "runs": [cutting.describe_run(run) for run in runs],
+        "runs": [_describe(project_id, run, active) for run in runs],
     }
+
+
+def _active_run_jobs(project_id: str) -> dict[str, list[dict]]:
+    """Queued or running subtitle jobs, grouped by the run they touch."""
+    grouped: dict[str, list[dict]] = {}
+    for record in jobs.list_jobs(project_id):
+        if (
+            record["type"] in job_tasks.RUN_JOB_TYPES
+            and record["status"] in jobs.ACTIVE_STATUSES
+        ):
+            run_id = record["input"].get("run_id")
+            if isinstance(run_id, str):
+                grouped.setdefault(run_id, []).append(
+                    {"id": record["id"], "type": record["type"], "status": record["status"]}
+                )
+    return grouped
+
+
+def _describe(project_id: str, manifest: dict, active: dict[str, list[dict]]) -> dict:
+    """A run as the interface shows it: subtitles and pending jobs alongside."""
+    described = cutting.describe_run(manifest)
+    described["subtitles"] = subtitles.describe_run_subtitles(project_id, manifest["run_id"])
+    described["active_jobs"] = active.get(manifest["run_id"], [])
+    return described
 
 
 @router.get("/runs/{run_id}")
@@ -112,10 +137,32 @@ def get_cutting_run(project_id: str, run_id: str):
     try:
         storage.read_project(project_id)
         manifest = cutting.read_manifest(project_id, run_id)
+        active = _active_run_jobs(project_id)
     except storage.ProjectError as error:
         raise _fail(error) from error
 
-    return cutting.describe_run(manifest)
+    return _describe(project_id, manifest, active)
+
+
+@router.post("/runs/{run_id}/open-folder")
+def open_run_folder(project_id: str, run_id: str):
+    """Show the run's trimmed clips in Explorer on this machine."""
+    try:
+        storage.read_project(project_id)
+        cutting.read_manifest(project_id, run_id)
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    directory = cutting.run_directory(project_id, run_id)
+    clips = directory / cutting.CLIPS_DIRECTORY
+    try:
+        player.open_folder(str(clips if clips.is_dir() else directory))
+    except OSError as error:
+        raise HTTPException(
+            status_code=500, detail="The folder could not be opened: %s" % error
+        ) from error
+
+    return {"opened": True}
 
 
 def _resolve(project_id: str, run_id: str, output_id: str):

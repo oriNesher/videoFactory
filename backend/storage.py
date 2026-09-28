@@ -495,15 +495,35 @@ def save_project(project_id: str, name: Any, source_ids: Any) -> dict:
 # --- presentation -----------------------------------------------------------
 
 
+# Probed durations, keyed by (path, size, mtime) so a re-recorded take is
+# probed again. Projects are re-described on every load; FFprobe is not free.
+_duration_cache: dict[tuple, float | None] = {}
+
+
+def _source_duration(path: str, size: int, modified_ns: int) -> float | None:
+    key = (path, size, modified_ns)
+    if key not in _duration_cache:
+        from . import media
+
+        try:
+            _duration_cache[key] = media.probe(path)["duration_seconds"]
+        except media.MediaError:
+            _duration_cache[key] = None
+    return _duration_cache[key]
+
+
 def describe_sources(sources: list[dict]) -> list[dict]:
-    """Add derived, never-persisted fields: filename, existence, size."""
+    """Add derived, never-persisted fields: filename, existence, size, duration."""
     described = []
 
     for source in sources:
         path = source["path"]
+        duration = None
         try:
             exists = os.path.isfile(path)
             size = os.path.getsize(path) if exists else None
+            if exists:
+                duration = _source_duration(path, size, os.stat(path).st_mtime_ns)
         except OSError:
             exists, size = False, None
 
@@ -515,6 +535,7 @@ def describe_sources(sources: list[dict]) -> list[dict]:
                 "added_at": source.get("added_at", ""),
                 "exists": exists,
                 "size_bytes": size,
+                "duration_seconds": duration,
             }
         )
 

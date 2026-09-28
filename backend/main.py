@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import api_ai, api_cutting, api_jobs, jobs, projects, tools
+from . import api_ai, api_cutting, api_jobs, api_subtitles, jobs, projects, tools
 from . import job_tasks  # noqa: F401  - importing it registers the job types
 from .config import WORKSPACE_ENV_VAR, get_workspace_root, load_env_file
 
@@ -27,6 +27,7 @@ app = FastAPI(title="Video Factory", lifespan=lifespan)
 app.include_router(projects.router)
 app.include_router(api_jobs.router)
 app.include_router(api_cutting.router)
+app.include_router(api_subtitles.router)
 app.include_router(api_ai.router)
 
 

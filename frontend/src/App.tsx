@@ -18,7 +18,7 @@ function App() {
             className={tab === 'projects' ? 'tab active' : 'tab'}
             onClick={() => setTab('projects')}
           >
-            Projects
+            Videos
           </button>
           <button
             type="button"

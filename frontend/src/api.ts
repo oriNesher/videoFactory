@@ -12,6 +12,7 @@ import type {
   Project,
   ProjectListing,
   ResourceCatalog,
+  SubtitleSettings,
   ToolStatus,
   ToolVersion,
 } from './types'
@@ -99,6 +100,12 @@ export function addSourceDirectory(projectId: string, path?: string) {
   return request<AddDirectoryResult>(`/projects/${projectId}/sources/directory`, {
     method: 'POST',
     body: JSON.stringify({ path: path ?? null }),
+  })
+}
+
+export function openSourceInVlc(projectId: string, sourceId: string) {
+  return request<{ opened: boolean }>(`/projects/${projectId}/sources/${sourceId}/open`, {
+    method: 'POST',
   })
 }
 
@@ -258,6 +265,13 @@ export function listCuttingRuns(projectId: string) {
   return request<CutRunListing>(`/projects/${projectId}/cutting/runs`)
 }
 
+export function openRunFolder(projectId: string, runId: string) {
+  return request<{ opened: boolean }>(
+    `/projects/${projectId}/cutting/runs/${runId}/open-folder`,
+    { method: 'POST' },
+  )
+}
+
 export function getCuttingRun(projectId: string, runId: string) {
   return request<CutRun>(`/projects/${projectId}/cutting/runs/${runId}`)
 }
@@ -275,4 +289,49 @@ export function outputUrl(
   kind: 'stream' | 'download' = 'stream',
 ) {
   return `/api/projects/${projectId}/cutting/runs/${runId}/outputs/${outputId}/${kind}`
+}
+
+// --- subtitles (Whisper) ----------------------------------------------------
+
+export function getSubtitleSettings(projectId: string) {
+  return request<SubtitleSettings>(`/projects/${projectId}/subtitles/settings`)
+}
+
+export function saveSubtitleSettings(
+  projectId: string,
+  settings: Record<string, number>,
+) {
+  return request<SubtitleSettings>(`/projects/${projectId}/subtitles/settings`, {
+    method: 'PUT',
+    body: JSON.stringify({ settings }),
+  })
+}
+
+/**
+ * Returns the queued *job*: Whisper always runs through the job queue. The
+ * model and the language (Hebrew) are fixed by the backend.
+ *
+ * Without `outputIds` it transcribes the run's merged video, and the job
+ * merges the run's clips first when the run has no merged video yet.
+ */
+export function startSubtitles(
+  projectId: string,
+  runId: string,
+  outputIds: string[] | null,
+  settings: Record<string, number>,
+) {
+  return request<Job>(`/projects/${projectId}/subtitles/jobs`, {
+    method: 'POST',
+    body: JSON.stringify({ run_id: runId, output_ids: outputIds, settings }),
+  })
+}
+
+/** `vtt` feeds the player's <track>; `srt` is the download for Premiere. */
+export function subtitleUrl(
+  projectId: string,
+  runId: string,
+  outputId: string,
+  kind: 'vtt' | 'srt',
+) {
+  return `/api/projects/${projectId}/subtitles/runs/${runId}/outputs/${outputId}/${kind}`
 }

@@ -519,7 +519,7 @@ export default function PlanPanel({
       )}
 
       {plans.length === 0 && (
-        <p className="hint">No plans in this project yet.</p>
+        <p className="hint">No plans yet.</p>
       )}
 
       {plans.length > 0 && (

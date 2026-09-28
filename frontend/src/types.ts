@@ -5,6 +5,7 @@ export type SourceMedia = {
   added_at: string
   exists: boolean
   size_bytes: number | null
+  duration_seconds: number | null
 }
 
 /** What came of adding a folder: partial success is normal and is reported. */
@@ -273,7 +274,6 @@ export type CuttingCatalog = {
   defaults: Record<string, number>
   default_output_mode: string
   parameters: CuttingParameterSpec[]
-  output_modes: CuttingOutputMode[]
   max_sources_per_run: number
 }
 
@@ -303,6 +303,12 @@ export type CutRunSource = {
   fingerprint: { method: string; digest: string; size_bytes: number }
   video: StreamInfo
   audio: StreamInfo
+  /** Measured loudness. `peak_ratio` is on the same 0–1 scale as the threshold. */
+  audio_level: {
+    max_db: number | null
+    mean_db: number | null
+    peak_ratio: number | null
+  } | null
 }
 
 export type CutClipStatus =
@@ -376,11 +382,80 @@ export type CutRun = {
   clip_duration_seconds: number
   removed_duration_seconds: number
   is_complete_result: boolean
+  /** Subtitles per output id; only clips that have some or had an attempt. */
+  subtitles: Record<string, ClipSubtitles>
+  /** Subtitle jobs on this run that are queued or running. */
+  active_jobs: { id: string; type: 'subtitles'; status: string }[]
 }
 
 export type CutRunListing = {
   project_id: string
   runs: CutRun[]
+}
+
+// --- subtitles (Whisper) ----------------------------------------------------
+
+export type SubtitleParameterSpec = {
+  name: string
+  type: 'integer' | 'number'
+  default: number
+  min: number
+  max: number
+  step: number
+  unit: string
+  label: string
+  description: string
+}
+
+export type SubtitleCatalog = {
+  /** Is faster-whisper importable by the backend at all? */
+  installed: boolean
+  defaults: Record<string, number>
+  parameters: SubtitleParameterSpec[]
+  /** The one model the backend uses; not a choice. */
+  model: {
+    id: string
+    label: string
+    /** Roughly what the first use downloads. */
+    download: string
+    downloaded: boolean
+  }
+  language: string
+}
+
+export type SubtitleSettings = {
+  project_id: string
+  catalog: SubtitleCatalog
+  settings: Record<string, number>
+}
+
+export type SubtitleAttemptStatus =
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+
+export type ClipSubtitles = {
+  output_id: string
+  /** True when an SRT is on disk for this clip. */
+  available: boolean
+  current: {
+    job_id: string
+    created_at: string
+    model: string
+    language: string
+    detected_language: string | null
+    line_count: number
+    filename: string
+  } | null
+  /** The most recent attempt, which may have failed after `current` was made. */
+  attempt: {
+    status: SubtitleAttemptStatus
+    job_id: string
+    model: string
+    error: string | null
+  } | null
 }
 
 export type GeneratedResource = {

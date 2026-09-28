@@ -61,6 +61,47 @@ def _write_log(directory: Path, name: str, command: list[str], output: str) -> s
     return str(path.relative_to(directory)).replace("\\", "/")
 
 
+def _empty_clip_explanation(source: dict, settings: dict) -> str:
+    """Say why a clip came back empty, with a number where one is available.
+
+    "Lower the threshold and try again" is useless advice when the take peaks
+    at 1.9% of full scale and the threshold is 4% — the user cannot tell how
+    much lower. The measured peak turns that into a specific value to try.
+    """
+    filename = source["filename"]
+    level = source.get("audio_level") or {}
+    peak_ratio = level.get("peak_ratio")
+    peak_db = level.get("max_db")
+    threshold = settings["audio_threshold"]
+
+    base = (
+        'Nothing was left of "%s" after cutting: with these settings the whole '
+        "file counted as silence." % filename
+    )
+
+    suggestion = media.suggested_threshold(level)
+
+    if suggestion is not None and peak_ratio is not None and peak_db is not None:
+        return (
+            "%s The take averages %.1f dB and peaks at %.3f (%.1f dB), against an "
+            "audio threshold of %s. Try a threshold of about %s."
+            % (base, level["mean_db"], peak_ratio, peak_db, threshold, suggestion)
+        )
+
+    if suggestion is not None:
+        return (
+            "%s Try an audio threshold of about %s, or lower "
+            '"minimum speech to keep" (now %ss).'
+            % (base, suggestion, settings["min_speech_seconds"])
+        )
+
+    return (
+        '%s Lower the audio threshold (now %s) or "minimum speech to keep" '
+        "(now %ss) and try again."
+        % (base, threshold, settings["min_speech_seconds"])
+    )
+
+
 def _finish(manifest: dict, status: str, error: str | None = None) -> dict:
     manifest["status"] = status
     manifest["finished_at"] = cutting.now()
@@ -212,11 +253,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
             clip["status"] = cutting.CLIP_EMPTY
             clip["duration_seconds"] = 0.0
             clip["removed_seconds"] = source["duration_seconds"]
-            clip["error"] = (
-                'Nothing was left of "%s" after cutting: with these settings the whole '
-                'file counted as silence. Lower the audio threshold or the '
-                '"minimum speech to keep" and try again.' % source["filename"]
-            )
+            clip["error"] = _empty_clip_explanation(source, settings)
             _discard(output_path)
             manifest["clips"].append(clip)
             manifest["notes"].append(clip["error"])
@@ -266,11 +303,21 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
     ]
 
     if not produced:
-        message = (
-            "No clip was produced: with these settings every selected file counted "
-            'as pure silence. Lower the audio threshold or the "minimum speech '
-            'to keep" and try again.'
-        )
+        # Repeat the per-clip reasoning at run level rather than a vaguer
+        # version of it: if one take explains the outcome, that is the message
+        # worth showing.
+        empty = [c for c in manifest["clips"] if c["status"] == cutting.CLIP_EMPTY]
+        if len(empty) == 1 and empty[0].get("error"):
+            message = empty[0]["error"]
+        else:
+            message = (
+                "No clip was produced: with these settings every selected file "
+                "counted as pure silence. %s"
+                % " ".join(
+                    clip["error"] for clip in empty if clip.get("error")
+                )
+            ).strip()
+
         _finish(manifest, cutting.RUN_FAILED, message)
         raise jobs.JobFailed(message)
 
@@ -307,6 +354,57 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         "combined_complete": combined.get("complete"),
         "summary": _summarise(manifest, produced, empty, combined),
     }
+
+
+def merge_run(context: jobs.JobContext, run_id: str) -> dict:
+    """Merge the clips of a run that was cut without a merged video.
+
+    Called from the subtitle job, so a run cut before merging became automatic
+    gets its merged video in the background, just before it is transcribed.
+    The same join as a cut run's own, on the clips already on disk, in their
+    run order. The run's own status is left alone: its cut succeeded or failed
+    on its own terms, and a failed merge is recorded on the merged-video entry
+    instead, where the interface shows it. Returns the merged-video entry.
+    """
+    project_id = context.project_id
+
+    try:
+        manifest = cutting.read_manifest(project_id, run_id)
+    except cutting.CuttingError as error:
+        raise jobs.JobFailed(error.message) from error
+
+    if cutting.has_merged_video(manifest):
+        return manifest["combined"]
+
+    directory = cutting.run_directory(project_id, run_id)
+    produced = sorted(
+        (
+            clip
+            for clip in manifest.get("clips") or []
+            if clip.get("status") == cutting.CLIP_SUCCEEDED
+            and (directory / (clip.get("relative_path") or "")).is_file()
+        ),
+        key=lambda clip: clip.get("order") or 0,
+    )
+    if not produced:
+        raise jobs.JobFailed("None of this run's clips are on disk any more.")
+
+    # Recorded as both from now on, so the merged video counts as a project
+    # output alongside the clips.
+    if manifest.get("output_mode") == cutting.MODE_CLIPS:
+        manifest["output_mode"] = cutting.MODE_BOTH
+
+    try:
+        _combine(context, manifest, directory, produced, 0, 1)
+    except jobs.JobCancelled:
+        combined = manifest.get("combined") or {}
+        combined["status"] = cutting.CLIP_CANCELLED
+        combined["error"] = "Merging was cancelled at your request."
+        manifest["combined"] = combined
+        cutting.write_manifest(manifest)
+        raise
+
+    return manifest["combined"]
 
 
 def _summarise(manifest: dict, produced: list, empty: list, combined: dict) -> str:

@@ -70,6 +70,29 @@ def wait_for_job(client, project_id, job_id, timeout=180.0):
 # --- synthetic footage -------------------------------------------------------
 
 
+def make_silent_track_clip(path: Path, seconds: int = 6) -> Path:
+    """A clip that *has* an audio track carrying no sound.
+
+    This is what a screen recording made without microphone input looks like,
+    and it is not the same thing as having no audio track at all.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg.exe", "-y", "-v", "error",
+            "-f", "lavfi",
+            "-i", "testsrc2=size=320x180:rate=25:duration=%d" % seconds,
+            "-f", "lavfi",
+            "-i", "anullsrc=sample_rate=48000:channel_layout=stereo",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return path
+
+
 def make_clip(
     path: Path,
     *,
@@ -222,7 +245,7 @@ def test_settings_catalog_describes_every_parameter_with_units():
         assert parameter["label"]
         assert parameter["min"] <= parameter["default"] <= parameter["max"]
 
-    assert {mode["id"] for mode in catalog["output_modes"]} == set(cutting.OUTPUT_MODES)
+    assert catalog["default_output_mode"] == cutting.MODE_CLIPS
 
 
 # =============================================================================
@@ -1223,6 +1246,33 @@ def test_a_run_of_another_project_is_not_reachable(client, project, stub_sources
     assert response.status_code == 404
 
 
+
+def test_open_folder_shows_the_runs_clips_directory(client, project, stub_sources, monkeypatch):
+    from backend import player
+
+    monkeypatch.setattr(processes, "run", FakeProcess(stub_success()))
+    opened = []
+    monkeypatch.setattr(player, "open_folder", opened.append)
+    record = wait_for_job(
+        client, project["id"], start_run(client, project["id"], stub_sources).json()["id"]
+    )
+    run_id = record["result"]["run_id"]
+
+    response = client.post(f"/projects/{project['id']}/cutting/runs/{run_id}/open-folder")
+
+    assert response.status_code == 200, response.text
+    run_dir = cutting.run_directory(project["id"], run_id)
+    assert opened in ([str(run_dir / cutting.CLIPS_DIRECTORY)], [str(run_dir)])
+
+
+def test_open_folder_of_unknown_run_is_rejected(client, project, monkeypatch):
+    from backend import player
+
+    monkeypatch.setattr(player, "open_folder", lambda _: pytest.fail("opened"))
+    response = client.post(f"/projects/{project['id']}/cutting/runs/{"0" * 12}/open-folder")
+
+    assert response.status_code == 404
+
 # =============================================================================
 # The real thing
 # =============================================================================
@@ -1407,6 +1457,121 @@ def test_media_probe_rejects_what_it_cannot_use(tmp_path):
 
     with pytest.raises(media.MediaError):
         media.describe_input(str(tmp_path / "missing.mp4"))
+
+
+def test_suggested_threshold_is_based_on_the_mean_not_the_peak():
+    """A single loud transient says nothing about where the line belongs.
+
+    The real case: a take peaking at 0.019 with a mean of -65.6 dB produced
+    nothing at half its peak, because speech has to *stay* above the threshold.
+    """
+    quiet_with_transient = {"max_db": -34.4, "mean_db": -65.6, "peak_ratio": 0.019}
+    assert media.suggested_threshold(quiet_with_transient) is None
+
+    # A normal, if quiet, recording gets a workable number.
+    normal = {"max_db": -6.0, "mean_db": -30.0, "peak_ratio": 0.5}
+    suggestion = media.suggested_threshold(normal)
+    assert suggestion is not None
+    assert 0.001 < suggestion < 0.5
+
+    assert media.suggested_threshold(None) is None
+    assert media.suggested_threshold({"mean_db": None}) is None
+
+
+@needs_tools
+def test_loudness_is_measured_for_a_real_clip(tmp_path):
+    loud = make_clip(tmp_path / "loud.mp4", seconds=4)
+    level = media.measure_audio_level(str(loud))
+
+    assert level["max_db"] is not None
+    # Comfortably above the default threshold, which is why the end-to-end
+    # tests cut this material successfully.
+    assert level["peak_ratio"] > cutting.default_settings()["audio_threshold"]
+    assert level["max_db"] > media.SILENT_PEAK_DB
+    assert level["mean_db"] < level["max_db"]
+
+
+@needs_tools
+def test_a_silent_audio_track_is_refused_before_rendering(client, project, tmp_path):
+    """An audio track with no sound in it: the real failure this module hit.
+
+    The message must not advise lowering the threshold, because no threshold
+    can find speech in silence — that advice would cost a full render to learn.
+    """
+    silent = make_silent_track_clip(tmp_path / "screen capture.mp4")
+
+    # It genuinely has an audio stream; that is the whole point.
+    assert media.probe(str(silent))["has_audio"] is True
+
+    source = add_source(client, project["id"], silent)
+    response = start_run(client, project["id"], [source])
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "screen capture.mp4" in detail
+    assert "silent" in detail.lower()
+    assert "cannot help" in detail.lower()
+    # Nothing was queued and nothing was rendered.
+    assert client.get(f"/projects/{project['id']}/jobs").json()["jobs"] == []
+    assert cutting.list_runs(project["id"]) == []
+
+
+@needs_tools
+def test_a_noise_floor_without_speech_is_refused_too(tmp_path):
+    """Sound, but no sustained sound — the second real file behaved this way.
+
+    Synthesised to match what was measured: near-silence with one transient, so
+    the peak looks usable and the mean gives it away.
+    """
+    path = tmp_path / "no mic.mp4"
+    subprocess.run(
+        [
+            "ffmpeg.exe", "-y", "-v", "error",
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25:duration=6",
+            "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=6",
+            # Essentially inaudible throughout, with a brief louder blip.
+            "-af", "volume='if(lt(mod(t,6),0.05),0.02,0.0005)':eval=frame",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    level = media.measure_audio_level(str(path))
+    assert level["mean_db"] <= media.NO_SPEECH_MEAN_DB
+    # The peak alone would not have caught this.
+    assert level["max_db"] > media.SILENT_PEAK_DB
+
+    with pytest.raises(media.MediaError) as caught:
+        media.describe_input(str(path), require_audio=True)
+
+    assert "no speech" in caught.value.message.lower()
+    assert "microphone" in caught.value.message.lower()
+
+
+def test_an_empty_clip_names_a_threshold_that_could_actually_work():
+    """A quiet-but-real take gets a specific number, not vague advice."""
+    source = {
+        "filename": "quiet take.mp4",
+        "audio_level": {"max_db": -6.0, "mean_db": -30.0, "peak_ratio": 0.5},
+    }
+    settings = dict(cutting.default_settings())
+
+    message = cut_runner._empty_clip_explanation(source, settings)
+    suggestion = media.suggested_threshold(source["audio_level"])
+
+    assert "quiet take.mp4" in message
+    assert "-30.0" in message
+    assert str(suggestion) in message
+
+
+def test_an_empty_clip_without_a_measurement_still_explains_itself():
+    message = cut_runner._empty_clip_explanation(
+        {"filename": "take.mp4", "audio_level": None}, cutting.default_settings()
+    )
+    assert "take.mp4" in message
+    assert "0.04" in message  # the threshold that was actually used
 
 
 @needs_tools

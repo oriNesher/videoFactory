@@ -209,7 +209,7 @@ export default function JobsPanel({
 
       {error && <p className="message error">{error}</p>}
 
-      {jobs.length === 0 && <p className="hint">No jobs in this project yet.</p>}
+      {jobs.length === 0 && <p className="hint">No jobs yet.</p>}
 
       <ul className="jobs">
         {jobs.map((job) => {

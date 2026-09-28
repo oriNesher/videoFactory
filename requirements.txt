@@ -6,6 +6,10 @@ uvicorn
 # never breaks startup.
 anthropic
 
+# Subtitles. Whisper runs locally on the CPU; the model is downloaded from
+# Hugging Face on first use and cached, after which no network is needed.
+faster-whisper
+
 # Tests
 pytest
 httpx

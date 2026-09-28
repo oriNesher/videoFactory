@@ -154,7 +154,8 @@ CAPABILITIES: dict[str, dict] = {
 # Areas the user may well ask about, which have no capability yet. This list is
 # text for the model's benefit only — nothing here can be referenced by a plan.
 NOT_YET_SUPPORTED = [
-    "Transcription (Whisper) and subtitles",
+    "Subtitles through a plan (subtitles are made with the Subtitles button on "
+    "a cut run, not through an editing plan)",
     "Zooms and effects",
     "B-roll and layer composition (Remotion)",
     "Background music and sound effects",

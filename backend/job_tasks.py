@@ -1,10 +1,13 @@
 """The job types this milestone can actually run.
 
-Four of them:
+Five of them:
 
 - `tool_check`      — the milestone-0A processing-tool check, run in the queue.
 - `cut_media`       — milestone 1A: trim the selected project sources with
                       Auto-Editor and, on request, join them with FFmpeg.
+- `subtitles`       — transcribe a cut run's merged video (merging its clips
+                      first if the run has none yet) or single clips with
+                      Whisper, and write an SRT beside each.
 - `plan_generation` — ask the configured provider for a plan proposal.
 - `plan_execution`  — run an approved plan. It can now drive real editing as
                       well as diagnostics, through the same code path the
@@ -26,11 +29,18 @@ from . import (
     plans,
     resources,
     storage,
+    subtitle_runner,
+    subtitles,
     tools,
 )
 
 TOOL_CHECK_JOB = "tool_check"
 CUT_MEDIA_JOB = "cut_media"
+SUBTITLES_JOB = "subtitles"
+
+# Jobs that work on an existing cut run, named by `input.run_id`. The run
+# listing reports which of them are active so the interface can show it.
+RUN_JOB_TYPES = (SUBTITLES_JOB,)
 PLAN_GENERATION_JOB = "plan_generation"
 PLAN_EXECUTION_JOB = "plan_execution"
 
@@ -90,6 +100,32 @@ def validate_cut_media_input(project_id: str, raw: Any) -> dict:
 
 def run_cut_media(context: jobs.JobContext) -> dict:
     return cut_runner.run_cutting(context)
+
+
+
+
+# --- subtitles --------------------------------------------------------------
+
+
+def validate_subtitles_input(project_id: str, raw: Any) -> dict:
+    """Resolve the chosen videos inside their run and freeze the settings."""
+    job_input = subtitles.build_job_input(project_id, raw)
+    # One subtitle job per run at a time: two could both start merging the
+    # same clips into the same file.
+    for record in jobs.list_jobs(project_id):
+        if (
+            record["type"] == SUBTITLES_JOB
+            and record["status"] in jobs.ACTIVE_STATUSES
+            and record["input"].get("run_id") == job_input["run_id"]
+        ):
+            raise subtitles.SubtitleError(
+                "Subtitles are already being created for this run.", status_code=409
+            )
+    return job_input
+
+
+def run_subtitles(context: jobs.JobContext) -> dict:
+    return subtitle_runner.run_subtitles(context)
 
 
 # --- plan generation --------------------------------------------------------
@@ -297,6 +333,13 @@ jobs.register_job_type(
     "Silence cutting",
     run_cut_media,
     validate_cut_media_input,
+)
+
+jobs.register_job_type(
+    SUBTITLES_JOB,
+    "Subtitles (Whisper)",
+    run_subtitles,
+    validate_subtitles_input,
 )
 
 jobs.register_job_type(
