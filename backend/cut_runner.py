@@ -532,12 +532,30 @@ def _combine(
         raise jobs.JobFailed(message)
 
     clip_paths = [str(directory / clip["relative_path"]) for clip in produced]
+
+    # Black frames Auto-Editor left at the end of a clip would show as a blip
+    # at every join. Cutting them needs the re-encoding join; a stream copy
+    # cannot drop them (see media.trailing_black_start).
+    context.progress("Checking the clips' endings…")
+    ends = [
+        media.trailing_black_start(path, clip.get("duration_seconds") or 0.0)
+        for path, clip in zip(clip_paths, produced)
+    ]
+    trimmed = sum(
+        (clip.get("duration_seconds") or 0.0) - end
+        for end, clip in zip(ends, produced)
+        if end is not None
+    )
+    combined["trimmed_black_seconds"] = round(trimmed, 3)
+    combined["expected_duration_seconds"] = round(
+        combined["expected_duration_seconds"] - trimmed, 3
+    )
     expected = combined["expected_duration_seconds"]
 
     signatures = {media.stream_signature(clip) for clip in produced}
     strategies: list[tuple[str, list[str]]] = []
 
-    if len(signatures) == 1:
+    if len(signatures) == 1 and not trimmed:
         list_path = directory / cutting.CONCAT_LIST_FILE
         list_path.write_text(
             "".join(cutting.concat_list_entry(path) for path in clip_paths),
@@ -558,7 +576,7 @@ def _combine(
         (
             cutting.COMBINE_REENCODE,
             cutting.build_concat_filter_command(
-                clip_paths, str(output_path), frame_rate
+                clip_paths, str(output_path), frame_rate, ends
             ),
         )
     )

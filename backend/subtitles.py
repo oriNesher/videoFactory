@@ -388,10 +388,22 @@ def _timestamp(seconds: float, separator: str) -> str:
     return "%02d:%02d:%02d%s%03d" % (hours, minutes, secs, separator, millis)
 
 
+# RIGHT-TO-LEFT MARK: invisible, and a strong right-to-left character. Many
+# subtitle renderers — Premiere among them — lay a line out left-to-right, so a
+# Hebrew line's final full stop or comma lands on the wrong side, and a line
+# that starts with a number or a Latin word runs the wrong way. A mark at each
+# end makes every line right-to-left wherever it is shown.
+RLM = "‏"
+
+
+def rtl(text: str) -> str:
+    return "%s%s%s" % (RLM, text, RLM)
+
+
 def render_srt(lines: list[Line]) -> str:
     blocks = [
         "%d\n%s --> %s\n%s\n"
-        % (number, _timestamp(line.start, ","), _timestamp(line.end, ","), line.text)
+        % (number, _timestamp(line.start, ","), _timestamp(line.end, ","), rtl(line.text))
         for number, line in enumerate(lines, start=1)
     ]
     return "\n".join(blocks)

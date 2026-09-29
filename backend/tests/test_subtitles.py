@@ -97,12 +97,13 @@ def test_segment_without_words_falls_back_to_its_text():
 def test_render_srt_and_vtt():
     lines = [subtitles.Line(0.0, 1.5, "שלום"), subtitles.Line(3661.25, 3662.0, "עולם")]
     srt = subtitles.render_srt(lines)
+    m = "‏"  # every line is wrapped in right-to-left marks
     assert srt == (
-        "1\n00:00:00,000 --> 00:00:01,500\nשלום\n\n"
-        "2\n01:01:01,250 --> 01:01:02,000\nעולם\n"
+        f"1\n00:00:00,000 --> 00:00:01,500\n{m}שלום{m}\n\n"
+        f"2\n01:01:01,250 --> 01:01:02,000\n{m}עולם{m}\n"
     )
     vtt = subtitles.srt_to_vtt("﻿" + srt)
-    assert vtt.startswith("WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.500\n")
+    assert vtt.startswith(f"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.500\n{m}שלום{m}\n")
 
 
 # --- pure: settings ----------------------------------------------------------
@@ -271,7 +272,7 @@ def test_job_writes_srt_and_shows_it_on_the_run(client, project):
     )
     assert srt.status_code == 200
     assert "0001_take1_trimmed.srt" in srt.headers["content-disposition"]
-    text = srt.content.decode("utf-8-sig")
+    text = srt.content.decode("utf-8-sig").replace("‏", "")
     # A pause after "לכולם." and the punctuation both end the first line.
     assert text == (
         "1\n00:00:00,000 --> 00:00:00,900\nשלום לכולם.\n\n"
@@ -444,6 +445,80 @@ def test_one_subtitle_job_per_run_at_a_time(client, project):
 
     client.post(f"/projects/{project['id']}/jobs/{first}/cancel")
     wait_for_job(client, project["id"], first)
+
+
+def make_black_tail_clip(path: Path) -> None:
+    """Two seconds whose last two frames are black, as Auto-Editor leaves them.
+
+    Encoded with B-frames (the libx264 default), like Auto-Editor's output —
+    that is what makes the black impossible to drop without re-encoding.
+    """
+    subprocess.run(
+        [
+            "ffmpeg.exe", "-y", "-v", "error",
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=2",
+            "-f", "lavfi", "-i", "sine=frequency=800:sample_rate=48000:duration=2",
+            "-vf", "drawbox=c=black:t=fill:enable='gte(n,58)'",
+            "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def black_runs(path: Path) -> list[str]:
+    output = subprocess.run(
+        ["ffmpeg.exe", "-hide_banner", "-nostats", "-i", str(path), "-an",
+         "-vf", "blackdetect=d=0:pix_th=0.10", "-f", "null", "-"],
+        capture_output=True, text=True,
+    ).stderr
+    return [line for line in output.splitlines() if "black_start" in line]
+
+
+@needs_ffmpeg
+def test_black_frames_at_the_end_are_found(tmp_path):
+    clip = tmp_path / "tail.mp4"
+    make_black_tail_clip(clip)
+    duration = media.verify_output(str(clip))["duration_seconds"]
+    assert media.trailing_black_start(str(clip), duration) == pytest.approx(58 / 30, abs=0.01)
+
+
+@needs_ffmpeg
+def test_merged_video_has_no_black_blips_between_clips(client, project):
+    """The reported bug: a black flash at every join of a merged video."""
+    run_id = make_run(project["id"], ["take1", "take2"])
+    directory = cutting.run_directory(project["id"], run_id)
+    manifest = cutting.read_manifest(project["id"], run_id)
+    for clip in manifest["clips"]:
+        path = directory / clip["relative_path"]
+        make_black_tail_clip(path)
+        described = media.describe_input(str(path))
+        clip.update(
+            video=described["video"],
+            audio=described["audio"],
+            duration_seconds=described["duration_seconds"],
+        )
+    cutting.write_manifest(manifest)
+
+    job = wait_for_job(
+        client, project["id"], start(client, project["id"], run_id, None).json()["id"], 60
+    )
+    assert job["status"] == "succeeded", job["error"]
+
+    run = client.get(f"/projects/{project['id']}/cutting/runs/{run_id}").json()
+    assert run["combined"]["strategy"] == cutting.COMBINE_REENCODE
+    assert run["combined"]["trimmed_black_seconds"] == pytest.approx(4 / 30, abs=0.02)
+    assert run["combined"]["duration_seconds"] == pytest.approx(2 * 58 / 30, abs=0.1)
+    assert black_runs(directory / run["combined"]["relative_path"]) == []
+
+
+@needs_ffmpeg
+def test_a_clip_without_a_black_tail_is_left_alone(tmp_path):
+    clip = tmp_path / "clean.mp4"
+    make_real_clip(clip)
+    duration = media.verify_output(str(clip))["duration_seconds"]
+    assert media.trailing_black_start(str(clip), duration) is None
 
 
 def test_missing_whisper_is_explained(client, project, monkeypatch):

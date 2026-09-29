@@ -216,6 +216,66 @@ def measure_audio_level(path: str) -> dict:
     return levels
 
 
+# Black at the very end of a trimmed clip. Auto-Editor 31.3.2 appends black
+# frames when the "margin after" of the last phrase runs past the end of the
+# recording's video — measured as two frames on every WhatsApp take tested.
+# Barely visible in one clip, it shows as a black blip at every join of a
+# merged video, so the merge cuts it off. It cannot be cut off the clip itself
+# without re-encoding: H.264 stores frames out of display order, and a stream
+# copy cut at the black keeps the black frames.
+TAIL_WINDOW_SECONDS = 3.0
+# Longer black than this is kept: it is a fade or a shot, not an artefact.
+TAIL_MAX_BLACK_SECONDS = 1.0
+# How close to the end the black must reach to count as "at the end".
+TAIL_END_TOLERANCE_SECONDS = 0.1
+
+
+def trailing_black_start(path: str, duration_seconds: float) -> float | None:
+    """Where black frames at the very end of a video begin, or None.
+
+    Only the last few seconds are decoded, so this costs a fraction of a
+    second on any length of clip. Never raises: anything that cannot be
+    measured is treated as "no black tail", which is the old behaviour.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg.exe", "-hide_banner", "-nostdin", "-nostats",
+             # Absolute timestamps, so the numbers compare with the duration.
+             "-sseof", "-%g" % TAIL_WINDOW_SECONDS, "-copyts", "-i", str(path),
+             "-an", "-vf", "blackdetect=d=0:pix_th=0.10", "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    last: tuple[float, float] | None = None
+    for line in (result.stderr or "").splitlines():
+        if "black_start:" not in line:
+            continue
+        try:
+            start = float(line.split("black_start:", 1)[1].split()[0])
+            end = float(line.split("black_end:", 1)[1].split()[0])
+        except (IndexError, ValueError):
+            continue
+        last = (start, end)
+
+    if last is None:
+        return None
+
+    start, end = last
+    # blackdetect reports the end of a black run that reaches EOF as the last
+    # frame's timestamp, one frame short of the duration.
+    if duration_seconds - end > TAIL_END_TOLERANCE_SECONDS:
+        return None
+    if duration_seconds - start > TAIL_MAX_BLACK_SECONDS or start <= 0:
+        return None
+    return start
+
+
 def suggested_threshold(level: dict | None) -> float | None:
     """A threshold that could plausibly separate speech from silence.
 

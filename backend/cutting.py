@@ -527,7 +527,10 @@ def build_concat_copy_command(list_path: str, output_path: str) -> list[str]:
 
 
 def build_concat_filter_command(
-    clip_paths: list[str], output_path: str, frame_rate: float
+    clip_paths: list[str],
+    output_path: str,
+    frame_rate: float,
+    ends: list[float | None] | None = None,
 ) -> list[str]:
     """Join by re-encoding through the concat *filter*.
 
@@ -537,7 +540,12 @@ def build_concat_filter_command(
     rate and audio format per input first, which is what makes the result
     correct. Dimensions are *not* normalised here on purpose; clips whose
     dimensions differ are refused earlier rather than stretched.
+
+    `ends`, when given, cuts each clip at that time — video and audio alike,
+    so sync holds — to drop the black frames Auto-Editor leaves at the end of
+    a clip (see `media.trailing_black_start`). None keeps a clip whole.
     """
+    ends = ends or [None] * len(clip_paths)
     command = ["ffmpeg.exe", "-y", "-hide_banner", "-nostdin", "-nostats",
                "-progress", "pipe:1"]
 
@@ -547,10 +555,15 @@ def build_concat_filter_command(
     rate = "%.6g" % frame_rate if frame_rate and frame_rate > 0 else "25"
     parts = []
     for index in range(len(clip_paths)):
-        parts.append("[%d:v:0]fps=%s,setsar=1[v%d]" % (index, rate, index))
+        end = ends[index]
+        video_trim = audio_trim = ""
+        if end is not None:
+            video_trim = "trim=end=%.6f,setpts=PTS-STARTPTS," % end
+            audio_trim = "atrim=end=%.6f,asetpts=PTS-STARTPTS," % end
+        parts.append("[%d:v:0]%sfps=%s,setsar=1[v%d]" % (index, video_trim, rate, index))
         parts.append(
-            "[%d:a:0]aresample=48000,aformat=sample_fmts=fltp:"
-            "channel_layouts=stereo[a%d]" % (index, index)
+            "[%d:a:0]%saresample=48000,aformat=sample_fmts=fltp:"
+            "channel_layouts=stereo[a%d]" % (index, audio_trim, index)
         )
 
     streams = "".join("[v%d][a%d]" % (i, i) for i in range(len(clip_paths)))
