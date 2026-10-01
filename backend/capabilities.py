@@ -15,12 +15,13 @@ there is no parameter type that could hold one.
 
 from typing import Any
 
-from . import cutting, storage
+from . import boundaries, cutting, storage
 from .tools import TOOL_LABELS, TOOL_NAMES
 
 # Bumped whenever a capability is added, removed or its parameters change.
 # Plans record the version they were generated against.
-CATALOG_VERSION = 2
+# 3: `edit.trim_boundaries` added (milestone 1B).
+CATALOG_VERSION = 3
 
 # Kinds are how a capability is classified for the user. `diagnostic` means it
 # inspects the machine and reports; it never touches video.
@@ -34,6 +35,17 @@ KIND_LABELS = {
 
 TOOL_CHECK = "diagnostics.tool_check"
 CUT_SILENCE = "edit.cut_silence"
+TRIM_BOUNDARIES = "edit.trim_boundaries"
+
+# Which capability implements which cutting mode. Two capabilities rather than
+# one with a `mode` parameter: a plan's capability id then says, by itself,
+# whether pauses inside a clip will be removed, and no parameter edit can turn
+# one into the other.
+CAPABILITY_FOR_CUT_MODE = {
+    cutting.CUT_MODE_BOUNDARY: TRIM_BOUNDARIES,
+    cutting.CUT_MODE_FULL: CUT_SILENCE,
+}
+CUT_MODE_FOR_CAPABILITY = {value: key for key, value in CAPABILITY_FOR_CUT_MODE.items()}
 
 # Defence in depth. The whitelist below already makes these impossible, but a
 # plan that so much as *tries* to carry executable content is rejected loudly.
@@ -78,7 +90,12 @@ def _cut_parameters() -> dict:
             % (spec["description"], spec["unit"], spec["default"]),
         }
 
-    specs["output_mode"] = {
+    specs["output_mode"] = _output_mode_parameter()
+    return specs
+
+
+def _output_mode_parameter() -> dict:
+    return {
         "type": "string",
         "required": False,
         "choices": list(cutting.OUTPUT_MODES),
@@ -90,6 +107,24 @@ def _cut_parameters() -> dict:
         ),
     }
 
+
+def _trim_parameters() -> dict:
+    """The boundary-only parameters, from the module that implements them."""
+    specs: dict = {}
+
+    for name, spec in boundaries.SETTINGS_SPEC.items():
+        specs[name] = {
+            "type": "number",
+            "required": False,
+            "default": spec["default"],
+            "min": spec["min"],
+            "max": spec["max"],
+            "unit": spec["unit"],
+            "description": "%s (%s). Default: %s."
+            % (spec["description"], spec["unit"], spec["default"]),
+        }
+
+    specs["output_mode"] = _output_mode_parameter()
     return specs
 
 
@@ -144,8 +179,44 @@ CAPABILITIES: dict[str, dict] = {
             "Joining into one video requires every clip to share the same "
             "dimensions and orientation; mixed dimensions are reported as a "
             "limitation rather than stretched.",
-            "There is no manual editing of cut boundaries yet, and no full "
-            "source-to-output cut map.",
+            "Removes pauses inside each clip as well as around it, which changes "
+            "the pacing of the delivery. Use edit.trim_boundaries to keep the "
+            "inside of a clip untouched.",
+            "Cut boundaries cannot be adjusted by hand in this mode, and no "
+            "preview samples are available for it.",
+            "Output is always MP4 (H.264 + AAC) at the source dimensions.",
+        ],
+    },
+    TRIM_BOUNDARIES: {
+        "id": TRIM_BOUNDARIES,
+        "version": 1,
+        "kind": KIND_EDITING,
+        "title": "Boundary-only trimming (FFmpeg)",
+        "purpose": (
+            "Removes the dead time before the first sound and after the last "
+            "sound of each clip and keeps everything in between as one continuous "
+            "piece, so pauses inside the delivery are preserved. Produces one "
+            "trimmed MP4 per source in the chosen order and on request joins them "
+            "into a single video. Detection and rendering run locally with FFmpeg; "
+            "source files are never changed."
+        ),
+        "executable": True,
+        "resource_types": ["video"],
+        "max_resources": cutting.MAX_SOURCES_PER_RUN,
+        "min_resources": 1,
+        "parameters": _trim_parameters(),
+        "limitations": [
+            "Detection measures loudness only. It cannot tell speech from a "
+            "cough, a click or background noise; the minimum-activity setting "
+            "only rejects sounds that are short.",
+            "Nothing inside the retained interval is removed: a mistake or a long "
+            "pause in the middle of a take stays.",
+            "A clip where no boundary is found is kept whole and flagged, never "
+            "dropped.",
+            "Manual start/end overrides saved in the cutting screen are applied "
+            "when a plan runs; they are not plan parameters.",
+            "Joining into one video requires every clip to share the same "
+            "dimensions and orientation.",
             "Output is always MP4 (H.264 + AAC) at the source dimensions.",
         ],
     },

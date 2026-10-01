@@ -270,19 +270,278 @@ export type CuttingOutputMode = {
   description: string
 }
 
+export type CutMode = 'boundary' | 'full_clip'
+
+export type CutModeInfo = {
+  id: CutMode
+  label: string
+  description: string
+  /** Which tool does the work in this mode. */
+  tool: string
+}
+
+/** A numeric setting as the backend describes it: range, unit, meaning. */
+export type NumberSpec = {
+  name: string
+  type: 'number'
+  default: number
+  min: number
+  max: number
+  step: number
+  unit: string
+  label: string
+  description: string
+}
+
 export type CuttingCatalog = {
+  /** The five full-clip (Auto-Editor) settings. */
   defaults: Record<string, number>
   default_output_mode: string
   parameters: CuttingParameterSpec[]
   max_sources_per_run: number
+  modes: CutModeInfo[]
+  default_mode: CutMode
+  /** The boundary-only settings: a separate set, never shared with the five. */
+  boundary: {
+    defaults: Record<string, number>
+    parameters: NumberSpec[]
+    bridge_seconds: number
+    initial_window_seconds: number
+  }
+  sample: NumberSpec
+  previews: { kinds: SampleKind[]; source_context_seconds: number }
+  /** What an AI recommendation request does and does not contain. */
+  advice: { data_sent: string[]; data_not_sent: string[] }
 }
+
+/** One clip's manual boundary, in seconds of the source. */
+export type BoundaryOverride = {
+  start_seconds?: number
+  end_seconds?: number
+  keep_whole?: boolean
+}
+
+export type AppliedPlan = { plan_id: string; revision: number }
 
 export type CuttingSettings = {
   project_id: string
   catalog: CuttingCatalog
+  mode: CutMode
+  /** False for a project that has never saved a cutting configuration. */
+  mode_is_explicit: boolean
   settings: Record<string, number>
+  boundary_settings: Record<string, number>
+  overrides: Record<string, BoundaryOverride>
+  sample_seconds: number
   output_mode: string
   source_ids: string[]
+  /** Goes up whenever a saved change would move a cut. */
+  revision: number
+  applied_plan: AppliedPlan | null
+}
+
+/** The cutting form as it is sent with every request. */
+export type CuttingForm = {
+  mode: CutMode
+  settings: Record<string, number>
+  boundary_settings: Record<string, number>
+  overrides: Record<string, BoundaryOverride>
+  sample_seconds: number
+  output_mode: string
+  source_ids: string[]
+  applied_plan: AppliedPlan | null
+}
+
+export type BoundaryWarning = {
+  code: string
+  severity: 'info' | 'warn'
+  message: string
+}
+
+export type BoundaryOrigin = 'detected' | 'manual' | 'kept_whole' | 'source_limit'
+
+/** Where one clip is cut: one continuous interval of its source. */
+export type ClipBoundary = {
+  status: 'detected' | 'no_activity' | 'no_audio'
+  start_seconds: number
+  end_seconds: number
+  start_origin: BoundaryOrigin
+  end_origin: BoundaryOrigin
+  source_duration_seconds: number
+  retained_seconds: number
+  removed_leading_seconds: number
+  removed_trailing_seconds: number
+  activity_start_seconds: number | null
+  activity_end_seconds: number | null
+  leading_padding_seconds: number
+  trailing_padding_seconds: number
+  override: BoundaryOverride | null
+  warnings: BoundaryWarning[]
+  /** True when no confident boundary was found on a side left to detection. */
+  needs_review: boolean
+  stats: {
+    peak: number | null
+    background_level: number | null
+    activity_level: number | null
+  }
+}
+
+export type CutStateClip = {
+  source_id: string
+  order: number
+  filename: string
+  available: boolean
+  duration_seconds: number | null
+  override: BoundaryOverride | null
+  /** False until this clip was analysed with the current detection settings. */
+  analysed: boolean
+  boundary: ClipBoundary | null
+  error: string | null
+}
+
+export type SampleKind = 'opening' | 'ending' | 'join'
+
+export type SampleRequest = {
+  kind: SampleKind
+  source_id: string
+  next_source_id?: string
+}
+
+export type SampleFile = {
+  filename: string
+  duration_seconds: number
+  size_bytes: number
+}
+
+export type CutSample = {
+  sample_id: string
+  job_id: string
+  created_at: string
+  kind: SampleKind
+  source_ids: string[]
+  sample_seconds: number
+  sources: {
+    source_id: string
+    filename: string
+    duration_seconds: number
+    override: BoundaryOverride | null
+    boundary: {
+      start_seconds: number
+      end_seconds: number
+      start_origin: BoundaryOrigin
+      end_origin: BoundaryOrigin
+      retained_seconds: number
+      needs_review: boolean
+    }
+  }[]
+  /** Exactly what decided where this sample was cut. */
+  basis: {
+    mode: CutMode
+    boundary_settings: Record<string, number>
+    settings_revision: number | null
+    applied_plan: AppliedPlan | null
+  }
+  edited: SampleFile & {
+    segments: {
+      source_id: string
+      source_start_seconds: number
+      source_end_seconds: number
+    }[]
+    /** Join previews: where the second clip takes over. */
+    join_at_seconds?: number
+  }
+  /** The same region of the source plus context; absent for a join. */
+  source_context:
+    | (SampleFile & {
+        source_start_seconds: number
+        source_end_seconds: number
+        /** Where, inside this excerpt, the edit starts (opening) or ends. */
+        cut_at_seconds: number
+        removed_shown_seconds: number
+      })
+    | null
+  notes: string[]
+  /** Derived server-side against the form as it stands now. */
+  stale: boolean
+  stale_reason: string | null
+}
+
+export type CutRecommendation = {
+  plan_id: string
+  revision: number
+  latest_revision: number
+  is_latest: boolean
+  revised_at: string
+  origin: 'ai' | 'user'
+  provider: ProviderInfo
+  request: string
+  feedback: string | null
+  mode: CutMode
+  requested_in_mode: CutMode
+  /** True when the proposal is for a different mode than the one selected. */
+  mode_changed: boolean
+  capability_id: string
+  settings: Record<string, number>
+  explanation: string
+  limitations: string[]
+  based_on_settings: Record<string, number> | null
+  based_on_settings_revision: number | null
+  approved: boolean
+  applied: boolean
+  stale: boolean
+  stale_reason: string | null
+}
+
+export type CuttingJobSummary = {
+  id: string
+  type: string
+  status: JobStatus
+  progress_message: string
+  progress_percent: number | null
+  finished_at: string | null
+  error: string | null
+  result: Record<string, unknown> | null
+}
+
+/** The cutting screen's live state for the form as it stands. */
+export type CuttingState = {
+  project_id: string
+  mode: CutMode
+  config_fingerprint: string | null
+  /** Null while the form holds unsaved changes. */
+  settings_revision: number | null
+  applied_plan: AppliedPlan | null
+  clips: CutStateClip[]
+  analysis_needed: boolean
+  needs_review_count: number
+  invalid_count: number
+  original_seconds: number
+  retained_seconds: number | null
+  samples: CutSample[]
+  recommendation: CutRecommendation | null
+  active_jobs: CuttingJobSummary[]
+  /** The newest finished job of each kind. */
+  recent_jobs: Record<string, CuttingJobSummary>
+}
+
+export type CutMapInterval = {
+  source_start: number
+  source_end: number
+  output_start: number
+  output_end: number
+}
+
+/** A clip's source-to-output mapping, or why there is none. */
+export type ClipCutMap = {
+  available: boolean
+  reason?: string
+  origin?: string
+  retained?: CutMapInterval[]
+  removed?: { source_start: number; source_end: number; position: string }[]
+  nominal_output_seconds?: number
+  measured_output_seconds?: number
+  difference_seconds?: number
+  tolerance_seconds?: number
 }
 
 export type StreamInfo = {
@@ -336,6 +595,11 @@ export type CutClip = {
   exit_code?: number
   command?: string
   log_path: string | null
+  /** Boundary-only runs: where this clip was cut, and how that was decided. */
+  boundary?: ClipBoundary
+  /** True when the source had no audio and a silent track was added. */
+  audio_synthesised?: boolean
+  cut_map?: ClipCutMap
   /** Derived server-side: is there a file behind this entry right now? */
   playable: boolean
 }
@@ -369,7 +633,24 @@ export type CutRun = {
   created_at: string
   finished_at: string | null
   status: CutRunStatus
-  settings: Record<string, number>
+  /** Runs made before modes existed are reported as `full_clip`. */
+  mode: CutMode
+  /** The five full-clip values; null for a boundary-only run. */
+  settings: Record<string, number> | null
+  /** The boundary-only values; null for a full-clip run. */
+  boundary_settings: Record<string, number> | null
+  /** The saved settings revision the run used; null for an unsaved form. */
+  settings_revision: number | null
+  applied_plan: AppliedPlan | null
+  /** The plan that ran this, when it was run from the plan panel. */
+  plan: AppliedPlan | null
+  cut_map: {
+    available: boolean
+    reason?: string
+    mapped_clip_count?: number
+    clip_count?: number
+    sequence_rendered?: boolean
+  }
   output_mode: string
   tool_versions: Record<string, string | null>
   sources: CutRunSource[]

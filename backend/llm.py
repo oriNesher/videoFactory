@@ -117,6 +117,62 @@ Respond with a single JSON object matching the response schema. No markdown, no 
 code fences, no text before or after the JSON."""
 
 
+CUT_SYSTEM_PROMPT = """You recommend cutting settings for Video Factory, a \
+local video production app. The user records a script as short takes, one clip \
+per take, and joins them. You do not execute anything: you return a proposal \
+that the backend validates and the user reviews, edits and approves.
+
+What you are given is a JSON object: the user's request, optional feedback on \
+previews they listened to, the cutting mode they have selected with its \
+current settings, the capabilities that implement each mode (with every \
+parameter's meaning, unit and range), and measurements of each clip.
+
+Hard rules:
+- You have NOT heard or seen any media. You have durations, detected boundary \
+times and loudness statistics only. Never claim to have listened, and never \
+describe what is said in a clip.
+- Propose ONLY parameters the capability for your chosen mode declares, within \
+their ranges. Anything else is rejected by the backend.
+- Keep the mode the user selected ("current.mode"). Propose the other mode \
+only if the request explicitly asks for what only that mode does - removing \
+pauses INSIDE a clip needs "full_clip"; trimming only the ends needs \
+"boundary". A wish for tighter pacing alone is not such a request. If you do \
+change it, say so first in the explanation.
+- The detection is loudness-based and cannot tell speech from other sound. \
+State uncertainty where the statistics are ambiguous (background level close \
+to the threshold, activity barely above it, no activity found).
+- Never output a command, a path, code or any executable expression.
+- If the request cannot be met by these settings at all (for example removing \
+a mistake or choosing the best take), return \
+{"supported": false, "explanation": "..."}.
+
+Respond with a single JSON object matching "response_schema". Write \
+"explanation" and "limitations" in English. No markdown, no code fences, no \
+text before or after the JSON."""
+
+CUT_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "supported": {"type": "boolean"},
+        "mode": {"type": "string", "enum": ["boundary", "full_clip"]},
+        "settings": {
+            "type": "object",
+            "description": "parameter name -> number, for the chosen mode only",
+        },
+        "explanation": {
+            "type": "string",
+            "description": "two or three sentences: what changes and why",
+        },
+        "limitations": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "what these settings cannot guarantee, or what is uncertain",
+        },
+    },
+    "required": ["supported", "explanation"],
+}
+
+
 def build_request(instruction: str, capability_catalog: dict, resource_catalog: dict) -> dict:
     """Exactly what is sent to a provider — and the mock's only input too."""
     return {
@@ -263,6 +319,93 @@ class MockProvider:
         }
 
 
+    # --- cutting recommendations ---------------------------------------------
+
+    TIGHTER_WORDS = ("tight", "faster", "shorter", "snappy", "less pause", "quicker")
+    ROOMIER_WORDS = ("breath", "room", "natural", "relaxed", "longer", "more pause", "slower")
+    CLIPPED_START_WORDS = ("first word is", "start is cut", "clipped at the start",
+                           "beginning is cut", "cuts off the start")
+    CLIPPED_END_WORDS = ("last word is", "end is cut", "clipped at the end",
+                         "cut off", "cuts off the end")
+
+    def recommend_cut(self, request: dict) -> dict:
+        """Fixed rules over the request text and the measured statistics.
+
+        Never changes the cutting mode, and says plainly that it is not a
+        model. Its purpose is to let the whole recommendation flow — propose,
+        edit, approve, apply — be exercised with no key and no network.
+        """
+        current = request["current"]
+        mode = current["mode"]
+        settings = dict(current["settings"])
+        text = ("%s %s" % (request.get("request", ""), request.get("feedback") or "")).lower()
+        changes: list[str] = []
+
+        def has(words: tuple) -> bool:
+            return any(word in text for word in words)
+
+        if mode == "boundary":
+            lead, trail = "leading_padding_seconds", "trailing_padding_seconds"
+            if has(self.TIGHTER_WORDS):
+                settings[trail] = round(max(0.15, settings[trail] - 0.1), 2)
+                settings[lead] = round(max(0.05, settings[lead] - 0.05), 2)
+                changes.append("less padding at both ends for tighter joins")
+            if has(self.ROOMIER_WORDS):
+                settings[trail] = round(min(5.0, settings[trail] + 0.15), 2)
+                changes.append("more padding after the end for breathing room")
+            if has(self.CLIPPED_START_WORDS):
+                settings[lead] = round(min(5.0, settings[lead] + 0.1), 2)
+                changes.append("more padding before the start")
+            if has(self.CLIPPED_END_WORDS):
+                settings[trail] = round(min(5.0, settings[trail] + 0.15), 2)
+                changes.append("more padding after the end")
+
+            backgrounds = [
+                clip["background_level"]
+                for clip in request.get("clips", [])
+                if clip.get("background_level") is not None
+            ]
+            threshold = settings["detection_threshold"]
+            if backgrounds and max(backgrounds) >= threshold * 0.5:
+                settings["detection_threshold"] = round(
+                    min(1.0, max(threshold, max(backgrounds) * 3)), 4
+                )
+                changes.append(
+                    "a higher threshold, because the measured background level is "
+                    "close to the current one"
+                )
+        else:
+            if has(self.TIGHTER_WORDS):
+                settings["margin_after_seconds"] = round(
+                    max(0.1, settings["margin_after_seconds"] - 0.1), 2
+                )
+                changes.append("a shorter margin after each spoken part")
+            if has(self.ROOMIER_WORDS):
+                settings["margin_after_seconds"] = round(
+                    min(10.0, settings["margin_after_seconds"] + 0.15), 2
+                )
+                changes.append("a longer margin after each spoken part")
+
+        return {
+            "supported": True,
+            "mode": mode,
+            "settings": settings,
+            "explanation": (
+                "Demo mode: fixed rules, not an AI model. %s"
+                % (
+                    "Proposed: %s." % "; ".join(changes)
+                    if changes
+                    else "Nothing in the request matched a rule, so the current "
+                    "settings are proposed unchanged."
+                )
+            ),
+            "limitations": [
+                "Demo rules only match a few keywords and look at the measured "
+                "statistics; no audio was listened to.",
+            ],
+        }
+
+
 class AnthropicProvider:
     """The one real integration: Anthropic's Messages API through the official SDK."""
 
@@ -284,6 +427,16 @@ class AnthropicProvider:
         }
 
     def propose(self, request: dict) -> dict:
+        return self._complete(SYSTEM_PROMPT, _user_message(request))
+
+    def recommend_cut(self, request: dict) -> dict:
+        """Ask for cutting settings. Sends statistics and text, never media."""
+        return self._complete(
+            CUT_SYSTEM_PROMPT, json.dumps(request, ensure_ascii=False, indent=2)
+        )
+
+    def _complete(self, system: str, user: str) -> dict:
+        """One bounded request, parsed as a JSON object."""
         try:
             import anthropic
         except ImportError as error:
@@ -302,9 +455,9 @@ class AnthropicProvider:
             response = client.messages.create(
                 model=self.model,
                 max_tokens=MAX_OUTPUT_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=system,
                 output_config={"effort": "low"},
-                messages=[{"role": "user", "content": _user_message(request)}],
+                messages=[{"role": "user", "content": user}],
             )
         except anthropic.APITimeoutError as error:
             raise ProviderError(

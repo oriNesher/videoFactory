@@ -23,8 +23,17 @@ Verified against Auto-Editor 31.3.2 on this machine (see docs/PROGRESS.md):
 `--margin BEFORE,AFTER`; and `--smooth MINCUT,MINCLIP`, where MINCUT is the
 shortest silence that will actually be removed and MINCLIP the shortest speech
 segment that will be kept.
+
+Milestone 1B adds a second way to cut, and makes it the default: **boundary-only
+trimming** (`backend/boundaries.py`), which removes the dead time before the
+first sound and after the last one and keeps everything in between — pauses
+included — as one continuous interval. The Auto-Editor path above is unchanged
+and is now the explicit "full-clip silence removal" mode. Both run through the
+same job, write the same kind of run directory and are joined the same way.
 """
 
+import hashlib
+import json
 import os
 import re
 import uuid
@@ -32,9 +41,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import media, processes, storage
+from . import boundaries, media, processes, storage
 
-RUN_SCHEMA_VERSION = 1
+# 2: runs carry `mode`, boundary settings, per-clip boundaries and a cut map.
+# A manifest without `mode` was written by 1A and is a full-clip run.
+RUN_SCHEMA_VERSION = 2
 
 CUTS_DIRECTORY = "cuts"
 MANIFEST_FILE_NAME = "manifest.json"
@@ -58,6 +69,55 @@ CLIP_EMPTY = "empty"
 CLIP_FAILED = "failed"
 CLIP_SKIPPED = "skipped"
 CLIP_CANCELLED = "cancelled"
+
+# --- cutting modes -----------------------------------------------------------
+
+CUT_MODE_BOUNDARY = "boundary"
+CUT_MODE_FULL = "full_clip"
+
+CUT_MODES = {
+    CUT_MODE_BOUNDARY: {
+        "id": CUT_MODE_BOUNDARY,
+        "label": "Boundary-only trimming",
+        "description": (
+            "Removes the dead time before the first sound and after the last "
+            "sound of each clip. Everything in between is kept as one continuous "
+            "piece, so the pauses inside your delivery stay exactly as recorded."
+        ),
+        "tool": "FFmpeg (detection and rendering)",
+    },
+    CUT_MODE_FULL: {
+        "id": CUT_MODE_FULL,
+        "label": "Full-clip silence removal",
+        "description": (
+            "Removes every silence it finds, including the pauses inside the "
+            "clip, and joins what is left. Tighter, and it changes your pacing."
+        ),
+        "tool": "Auto-Editor",
+    },
+}
+
+# What a configuration that has never been saved starts with.
+DEFAULT_CUT_MODE = CUT_MODE_BOUNDARY
+# What a saved configuration or a run from before modes existed *was*. Anything
+# stored without a mode was made by 1A, which only had Auto-Editor cutting; it
+# is never reinterpreted under the new default.
+LEGACY_CUT_MODE = CUT_MODE_FULL
+
+# How much of the edited clip a preview sample shows.
+SAMPLE_SECONDS_SPEC = {
+    "type": "number",
+    "default": 4.0,
+    "min": 1.0,
+    "max": 15.0,
+    "step": 0.5,
+    "unit": "seconds",
+    "label": "Preview length",
+    "description": (
+        "How many seconds of the edited clip each preview shows. A clip "
+        "shorter than this is shown whole."
+    ),
+}
 
 # --- output modes ------------------------------------------------------------
 
@@ -227,7 +287,12 @@ def default_settings() -> dict:
 
 
 def settings_catalog() -> dict:
-    """What the interface needs to render the form, straight from the spec."""
+    """What the interface needs to render the form, straight from the spec.
+
+    `defaults` and `parameters` are the five full-clip (Auto-Editor) settings,
+    as in 1A. The boundary-only settings live under `boundary`, so neither set
+    can be mistaken for the other.
+    """
     return {
         "defaults": default_settings(),
         "default_output_mode": DEFAULT_OUTPUT_MODE,
@@ -236,7 +301,58 @@ def settings_catalog() -> dict:
             for name, spec in SETTINGS_SPEC.items()
         ],
         "max_sources_per_run": MAX_SOURCES_PER_RUN,
+        "modes": list(CUT_MODES.values()),
+        "default_mode": DEFAULT_CUT_MODE,
+        "boundary": {
+            "defaults": boundaries.default_settings(),
+            "parameters": [
+                {"name": name, **spec} for name, spec in boundaries.SETTINGS_SPEC.items()
+            ],
+            "bridge_seconds": boundaries.BRIDGE_SECONDS,
+            "initial_window_seconds": boundaries.INITIAL_WINDOW_SECONDS,
+        },
+        "sample": {"name": "sample_seconds", **SAMPLE_SECONDS_SPEC},
     }
+
+
+def validate_cut_mode(raw: Any, fallback: str = DEFAULT_CUT_MODE) -> str:
+    if raw is None:
+        return fallback
+    if not isinstance(raw, str) or raw not in CUT_MODES:
+        raise CuttingError(
+            "Unsupported cutting mode. Available modes: %s." % ", ".join(CUT_MODES)
+        )
+    return raw
+
+
+def validate_sample_seconds(raw: Any) -> float:
+    spec = SAMPLE_SECONDS_SPEC
+    if raw is None:
+        return spec["default"]
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw != raw:
+        raise CuttingError("The preview length must be a number of seconds.")
+    if raw < spec["min"] or raw > spec["max"]:
+        raise CuttingError(
+            "The preview length must be between %s and %s seconds."
+            % (spec["min"], spec["max"])
+        )
+    return round(float(raw), 2)
+
+
+def validate_applied_plan(raw: Any) -> dict | None:
+    """Which approved AI proposal the current settings came from, if any."""
+    if raw is None:
+        return None
+    if (
+        not isinstance(raw, dict)
+        or not isinstance(raw.get("plan_id"), str)
+        or not re.match(r"^[0-9a-f]{32}$", raw["plan_id"])
+        or isinstance(raw.get("revision"), bool)
+        or not isinstance(raw.get("revision"), int)
+        or raw["revision"] < 1
+    ):
+        raise CuttingError("The applied-plan reference is invalid.")
+    return {"plan_id": raw["plan_id"], "revision": raw["revision"]}
 
 
 def validate_settings(raw: Any) -> dict:
@@ -286,57 +402,205 @@ def validate_output_mode(raw: Any) -> str:
     return raw
 
 
+def _blank_configuration() -> dict:
+    return {
+        "mode": DEFAULT_CUT_MODE,
+        "mode_is_explicit": False,
+        "settings": default_settings(),
+        "boundary_settings": boundaries.default_settings(),
+        "overrides": {},
+        "sample_seconds": SAMPLE_SECONDS_SPEC["default"],
+        "output_mode": DEFAULT_OUTPUT_MODE,
+        "source_ids": [],
+        "revision": 0,
+        "applied_plan": None,
+    }
+
+
 def read_settings(project: dict) -> dict:
-    """The project's saved cutting settings, falling back to the defaults."""
+    """The project's saved cutting configuration, falling back to the defaults.
+
+    A project that has never saved one gets the new default mode. A block saved
+    before modes existed keeps the mode it was written under (full-clip): the
+    user's explicit settings are not reinterpreted.
+    """
     stored = project.get("settings", {}).get(SETTINGS_KEY)
     if not isinstance(stored, dict):
-        return {
-            "settings": default_settings(),
-            "output_mode": DEFAULT_OUTPUT_MODE,
-            "source_ids": [],
-        }
+        return _blank_configuration()
 
+    configuration = _blank_configuration()
+    known = {source["id"] for source in project.get("sources", [])}
+
+    # Each part falls back on its own: a hand-edited or older block must never
+    # stop a project from opening, and one bad value must not discard the rest.
     try:
         settings = validate_settings(stored.get("settings"))
         output_mode = validate_output_mode(stored.get("output_mode"))
     except CuttingError:
-        # A hand-edited or older settings block must never stop a project from
-        # opening: fall back to the defaults and let the user save over them.
-        settings, output_mode = default_settings(), DEFAULT_OUTPUT_MODE
+        pass
+    else:
+        configuration["settings"] = settings
+        configuration["output_mode"] = output_mode
 
-    known = {source["id"] for source in project.get("sources", [])}
+    try:
+        configuration["mode"] = validate_cut_mode(stored.get("mode"), LEGACY_CUT_MODE)
+    except CuttingError:
+        configuration["mode"] = LEGACY_CUT_MODE
+    configuration["mode_is_explicit"] = True
+
+    try:
+        configuration["boundary_settings"] = boundaries.validate_settings(
+            stored.get("boundary_settings")
+        )
+    except storage.ProjectError:
+        pass
+
+    try:
+        configuration["overrides"] = boundaries.validate_overrides(
+            stored.get("overrides"), known
+        )
+    except storage.ProjectError:
+        pass
+
+    try:
+        configuration["sample_seconds"] = validate_sample_seconds(stored.get("sample_seconds"))
+    except CuttingError:
+        pass
+
+    try:
+        configuration["applied_plan"] = validate_applied_plan(stored.get("applied_plan"))
+    except CuttingError:
+        pass
+
     raw_ids = stored.get("source_ids")
-    source_ids = [
+    configuration["source_ids"] = [
         value
         for value in (raw_ids if isinstance(raw_ids, list) else [])
         if isinstance(value, str) and value in known
     ]
 
-    return {
-        "settings": settings,
-        "output_mode": output_mode,
-        "source_ids": source_ids,
-    }
+    revision = stored.get("revision")
+    configuration["revision"] = (
+        revision if isinstance(revision, int) and not isinstance(revision, bool) else 1
+    )
+
+    return configuration
 
 
-def save_settings(project_id: str, raw: Any) -> dict:
-    """Persist the cutting form with the project, validated first."""
+def normalise_configuration(project: dict, raw: Any, *, allow_empty: bool = False) -> dict:
+    """Validate a submitted cutting form against this project.
+
+    `mode` omitted means "whatever this project is set to" — the new default
+    for a project that never saved one, its own saved mode otherwise.
+    """
     if not isinstance(raw, dict):
         raise CuttingError("The cutting settings are invalid.")
 
+    stored = read_settings(project)
+    known = {source["id"] for source in project.get("sources", [])}
+
+    return {
+        "mode": validate_cut_mode(raw.get("mode"), stored["mode"]),
+        "settings": validate_settings(raw.get("settings")),
+        "boundary_settings": boundaries.validate_settings(raw.get("boundary_settings")),
+        "overrides": boundaries.validate_overrides(raw.get("overrides"), known),
+        "sample_seconds": validate_sample_seconds(raw.get("sample_seconds")),
+        "output_mode": validate_output_mode(raw.get("output_mode")),
+        "source_ids": _validate_source_ids(
+            project, raw.get("source_ids"), allow_empty=allow_empty
+        ),
+        "applied_plan": validate_applied_plan(raw.get("applied_plan")),
+    }
+
+
+def settings_content(configuration: dict) -> dict:
+    """The part of a configuration that decides *where the cuts fall*.
+
+    Its revision number is what samples, recommendations and runs are tagged
+    with. The selection, the output mode and the preview length are not part
+    of it: none of them moves a boundary.
+    """
+    return {
+        "mode": configuration["mode"],
+        "settings": configuration["settings"],
+        "boundary_settings": configuration["boundary_settings"],
+        "overrides": configuration["overrides"],
+    }
+
+
+def saved_revision(project: dict, configuration: dict) -> int | None:
+    """The saved settings revision this configuration is, or None if unsaved."""
+    stored = read_settings(project)
+    if not stored["mode_is_explicit"]:
+        return None
+    if settings_content(stored) != settings_content(configuration):
+        return None
+    return stored["revision"]
+
+
+def save_settings(project_id: str, raw: Any) -> dict:
+    """Persist the cutting form with the project, validated first.
+
+    The revision goes up only when something that moves a cut changed.
+    """
     project = storage.read_project(project_id)
-    settings = validate_settings(raw.get("settings"))
-    output_mode = validate_output_mode(raw.get("output_mode"))
-    source_ids = _validate_source_ids(project, raw.get("source_ids"), allow_empty=True)
+    configuration = normalise_configuration(project, raw, allow_empty=True)
+
+    previous = read_settings(project)
+    if not previous["mode_is_explicit"]:
+        revision = 1
+    elif settings_content(previous) != settings_content(configuration):
+        revision = previous["revision"] + 1
+    else:
+        revision = previous["revision"]
 
     project["settings"][SETTINGS_KEY] = {
-        "settings": settings,
-        "output_mode": output_mode,
-        "source_ids": source_ids,
+        "mode": configuration["mode"],
+        "settings": configuration["settings"],
+        "boundary_settings": configuration["boundary_settings"],
+        "overrides": configuration["overrides"],
+        "sample_seconds": configuration["sample_seconds"],
+        "output_mode": configuration["output_mode"],
+        "source_ids": configuration["source_ids"],
+        "applied_plan": configuration["applied_plan"],
+        "revision": revision,
         "saved_at": _now(),
     }
     saved = storage.write_project(project)
     return read_settings(saved)
+
+
+# --- what a result was made from ----------------------------------------------
+
+
+def _hash(value: Any) -> str:
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:%s" % hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def basis_key(configuration: dict, entries: list[tuple[str, str]]) -> str:
+    """Identify everything that decides the cuts of these sources, in order.
+
+    `entries` are `(source_id, file digest)` pairs. Two results with the same
+    key were cut at the same places from the same bytes; if the key differs,
+    one of them is stale. Settings of the mode that is *not* selected are left
+    out, so tuning one mode never invalidates the other's results.
+    """
+    mode = configuration["mode"]
+    if mode == CUT_MODE_BOUNDARY:
+        relevant: dict = {
+            "settings": configuration["boundary_settings"],
+            "sources": [
+                [source_id, digest, configuration["overrides"].get(source_id)]
+                for source_id, digest in entries
+            ],
+        }
+    else:
+        relevant = {
+            "settings": configuration["settings"],
+            "sources": [[source_id, digest] for source_id, digest in entries],
+        }
+    return _hash({"mode": mode, **relevant})
 
 
 # --- input selection --------------------------------------------------------
@@ -380,14 +644,17 @@ def build_job_input(project_id: str, raw: Any) -> dict:
     durations and file fingerprints taken *now*, so a run keeps processing what
     was submitted even if the project is edited while it waits in the queue,
     and so a retry re-runs the same thing.
+
+    The same snapshot serves the analysis, preview-sample and final-render
+    jobs, which is what lets them agree on where each clip is cut.
     """
     if not isinstance(raw, dict):
         raise CuttingError("The cut request is invalid.")
 
     project = storage.read_project(project_id)
-    source_ids = _validate_source_ids(project, raw.get("source_ids"))
-    settings = validate_settings(raw.get("settings"))
-    output_mode = validate_output_mode(raw.get("output_mode"))
+    configuration = normalise_configuration(project, raw)
+    mode = configuration["mode"]
+    source_ids = configuration["source_ids"]
 
     by_id = {source["id"]: source for source in project["sources"]}
     snapshot: list[dict] = []
@@ -403,34 +670,59 @@ def build_job_input(project_id: str, raw: Any) -> dict:
             )
 
         try:
-            described = media.describe_input(path, require_audio=True)
-            marks = media.fingerprint(path)
+            # Full-clip cutting has nothing to work with in a take that carries
+            # no sound, and says so before rendering. Boundary-only mode can
+            # still keep such a clip whole, or cut it at manual boundaries.
+            described = media.describe_input(path, require_audio=mode == CUT_MODE_FULL)
+            marks = boundaries.cached_fingerprint(path)
         except media.MediaError as error:
             raise CuttingError(error.message) from error
 
-        snapshot.append(
-            {
-                "source_id": source_id,
-                "order": index + 1,
-                "path": path,
-                "filename": filename,
-                "fingerprint": marks,
-                "duration_seconds": described["duration_seconds"],
-                "video": described["video"],
-                "audio": described["audio"],
-                # Measured peak and mean loudness. Recorded so that a clip which
-                # comes back empty can be explained with a number instead of a
-                # guess, and so a quiet take is visible in the manifest.
-                "audio_level": described.get("audio_level"),
-            }
-        )
+        entry = {
+            "source_id": source_id,
+            "order": index + 1,
+            "path": path,
+            "filename": filename,
+            "fingerprint": marks,
+            "duration_seconds": described["duration_seconds"],
+            "video": described["video"],
+            "audio": described["audio"],
+            # Measured peak and mean loudness. Recorded so that a clip which
+            # comes back empty can be explained with a number instead of a
+            # guess, and so a quiet take is visible in the manifest.
+            "audio_level": described.get("audio_level"),
+        }
 
+        if mode == CUT_MODE_BOUNDARY:
+            override = configuration["overrides"].get(source_id)
+            boundaries.check_override_fits(override, described["duration_seconds"], filename)
+            entry["override"] = override
+
+        snapshot.append(entry)
+
+    boundary = mode == CUT_MODE_BOUNDARY
     return {
-        "settings": settings,
-        "output_mode": output_mode,
+        "mode": mode,
+        # Each run records the settings of the mode it ran in, and only those.
+        "settings": None if boundary else configuration["settings"],
+        "boundary_settings": configuration["boundary_settings"] if boundary else None,
+        "output_mode": configuration["output_mode"],
         "source_ids": source_ids,
         "sources": snapshot,
+        "sample_seconds": configuration["sample_seconds"],
+        "settings_revision": saved_revision(project, configuration),
+        "applied_plan": configuration["applied_plan"],
+        "config_fingerprint": basis_key(
+            configuration,
+            [(entry["source_id"], entry["fingerprint"]["digest"]) for entry in snapshot],
+        ),
     }
+
+
+def job_mode(job_input: dict) -> str:
+    """The mode of a snapshot. One written before modes existed is full-clip."""
+    mode = job_input.get("mode")
+    return mode if mode in CUT_MODES else LEGACY_CUT_MODE
 
 
 def has_merged_video(manifest: dict) -> bool:
@@ -494,6 +786,121 @@ def build_cut_command(input_path: str, output_path: str, settings: dict) -> list
         "--faststart",
         "-o",
         output_path,
+    ]
+
+
+def build_trim_command(
+    input_path: str,
+    output_path: str,
+    start_seconds: float,
+    end_seconds: float,
+    has_audio: bool = True,
+) -> list[str]:
+    """Render one continuous interval of a source. An argument list, never text.
+
+    Re-encoded on purpose. A stream copy can only start on a keyframe, which in
+    a typical recording is up to several seconds away from the boundary that
+    was chosen; `-ss` before `-i` with re-encoding is frame-accurate, keeps
+    audio and video in step, and produces the same browser-playable H.264/AAC
+    as the rest of the pipeline. The price is encoding time proportional to
+    what is kept — analysing less audio does not reduce it.
+
+    A source with no audio gets a silent track, so every clip of a run has the
+    same streams and can still be joined.
+    """
+    length = max(0.0, end_seconds - start_seconds)
+    command = [
+        "ffmpeg.exe", "-y", "-hide_banner", "-nostdin", "-nostats",
+        "-progress", "pipe:1",
+        "-ss", "%.6f" % start_seconds,
+        "-t", "%.6f" % length,
+        "-i", input_path,
+    ]
+
+    if not has_audio:
+        command += [
+            "-f", "lavfi", "-t", "%.6f" % length,
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        ]
+
+    command += [
+        "-map", "0:v:0",
+        "-map", "0:a:0" if has_audio else "1:a:0",
+        "-sn", "-dn",
+        *REENCODE_VIDEO,
+        *REENCODE_AUDIO,
+        "-movflags", "+faststart",
+        output_path,
+    ]
+    return command
+
+
+def build_join_sample_command(
+    parts: list[dict], output_path: str, frame_rate: float
+) -> list[str]:
+    """Render consecutive intervals of several sources as one short clip.
+
+    Each part is `{path, start_seconds, end_seconds, has_audio}`. The same seek
+    as `build_trim_command` and the same per-input normalisation and encoder
+    settings as the re-encoding join, so a join preview is cut where the final
+    sequence will be cut.
+    """
+    command = ["ffmpeg.exe", "-y", "-hide_banner", "-nostdin", "-nostats",
+               "-progress", "pipe:1"]
+
+    for part in parts:
+        command += [
+            "-ss", "%.6f" % part["start_seconds"],
+            "-t", "%.6f" % max(0.0, part["end_seconds"] - part["start_seconds"]),
+            "-i", part["path"],
+        ]
+
+    rate = "%.6g" % frame_rate if frame_rate and frame_rate > 0 else "25"
+    graph = []
+    for index, part in enumerate(parts):
+        length = max(0.0, part["end_seconds"] - part["start_seconds"])
+        graph.append("[%d:v:0]fps=%s,setsar=1[v%d]" % (index, rate, index))
+        if part.get("has_audio", True):
+            graph.append(
+                "[%d:a:0]aresample=48000,aformat=sample_fmts=fltp:"
+                "channel_layouts=stereo[a%d]" % (index, index)
+            )
+        else:
+            graph.append(
+                "anullsrc=channel_layout=stereo:sample_rate=48000,"
+                "atrim=duration=%.6f[a%d]" % (length, index)
+            )
+
+    streams = "".join("[v%d][a%d]" % (i, i) for i in range(len(parts)))
+    graph.append("%sconcat=n=%d:v=1:a=1[v][a]" % (streams, len(parts)))
+
+    command += [
+        "-filter_complex", ";".join(graph),
+        "-map", "[v]", "-map", "[a]",
+        *REENCODE_VIDEO,
+        *REENCODE_AUDIO,
+        "-movflags", "+faststart",
+        output_path,
+    ]
+    return command
+
+
+def build_timeline_export_command(
+    input_path: str, output_path: str, settings: dict
+) -> list[str]:
+    """Ask Auto-Editor for its timeline instead of a video.
+
+    Verified on 31.3.2: `--export v3` writes a JSON timeline whose clips carry
+    `start`, `dur` and `offset` in timeline frames. `output_path` must end in
+    `.v3` — Auto-Editor replaces any other extension with it. The editing flags
+    are the same ones `build_cut_command` passes, so this is the timeline the
+    render used.
+    """
+    render = build_cut_command(input_path, output_path, settings)
+    # Everything up to the display and container flags: the input and the
+    # three editing options.
+    return render[: render.index("--progress")] + [
+        "--export", "v3", "--progress", "machine", "-o", output_path,
     ]
 
 
@@ -700,7 +1107,19 @@ def new_manifest(
         "created_at": _now(),
         "finished_at": None,
         "status": RUN_RUNNING,
-        "settings": job_input["settings"],
+        "mode": job_mode(job_input),
+        # The settings of the mode this run used. The other is null: a run
+        # never records numbers it did not apply.
+        "settings": job_input.get("settings"),
+        "boundary_settings": job_input.get("boundary_settings"),
+        # Which saved settings revision this was (null: an unsaved form), the
+        # approved AI proposal those settings came from, and the plan that ran
+        # it, when one did.
+        "settings_revision": job_input.get("settings_revision"),
+        "applied_plan": job_input.get("applied_plan"),
+        "plan": job_input.get("plan"),
+        "config_fingerprint": job_input.get("config_fingerprint"),
+        "cut_map": None,
         "output_mode": job_input["output_mode"],
         "tool_versions": tool_versions,
         # The exact inputs this run was handed, including their fingerprints.
@@ -719,6 +1138,17 @@ def new_manifest(
 def describe_run(manifest: dict) -> dict:
     """The API shape of a run: the manifest plus derived, never-stored fields."""
     described = dict(manifest)
+    # Older manifests carry no mode; they were all full-clip runs.
+    described["mode"] = job_mode(manifest)
+    described.setdefault("boundary_settings", None)
+    described.setdefault("settings_revision", None)
+    described.setdefault("applied_plan", None)
+    described.setdefault("plan", None)
+    if not isinstance(described.get("cut_map"), dict):
+        described["cut_map"] = {
+            "available": False,
+            "reason": "No cut map was recorded for this run.",
+        }
 
     clips = [dict(clip) for clip in manifest.get("clips") or []]
     for clip in clips:
@@ -816,6 +1246,11 @@ def generated_resources(project_id: str) -> list[dict]:
 
         run_id = manifest["run_id"]
         mode = manifest.get("output_mode", MODE_BOTH)
+        produced_by = (
+            "edit.trim_boundaries"
+            if job_mode(manifest) == CUT_MODE_BOUNDARY
+            else "edit.cut_silence"
+        )
 
         if mode in (MODE_CLIPS, MODE_BOTH):
             for clip in manifest.get("clips") or []:
@@ -830,7 +1265,7 @@ def generated_resources(project_id: str) -> list[dict]:
                         "kind": "trimmed_clip",
                         "filename": clip.get("filename", ""),
                         "media_type": "video",
-                        "produced_by": "edit.cut_silence",
+                        "produced_by": produced_by,
                         "from_source_id": clip.get("source_id"),
                         "duration_seconds": clip.get("duration_seconds"),
                         "size_bytes": clip.get("size_bytes"),
@@ -854,7 +1289,7 @@ def generated_resources(project_id: str) -> list[dict]:
                     "kind": "combined_video",
                     "filename": combined.get("filename", COMBINED_FILE_NAME),
                     "media_type": "video",
-                    "produced_by": "edit.cut_silence",
+                    "produced_by": produced_by,
                     "from_source_id": None,
                     "duration_seconds": combined.get("duration_seconds"),
                     "size_bytes": combined.get("size_bytes"),

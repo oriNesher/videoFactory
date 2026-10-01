@@ -147,6 +147,9 @@ def start_run(client, project_id, source_ids, **overrides):
         "source_ids": source_ids,
         "settings": overrides.pop("settings", None),
         "output_mode": overrides.pop("output_mode", cutting.MODE_BOTH),
+        # These are the 1A tests of the Auto-Editor pipeline, which is now the
+        # explicit full-clip mode rather than the default.
+        "mode": overrides.pop("mode", cutting.CUT_MODE_FULL),
     }
     return client.post(f"/projects/{project_id}/cutting/runs", json=body)
 

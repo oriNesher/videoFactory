@@ -119,7 +119,10 @@ def test_capability_catalog_only_lists_implemented_capabilities(client):
     catalog = client.get("/capabilities").json()
     by_id = {capability["id"]: capability for capability in catalog["capabilities"]}
 
-    assert sorted(by_id) == sorted([TOOL_CHECK, CUT_SILENCE])
+    # Milestone 1B registers boundary-only trimming alongside it.
+    assert sorted(by_id) == sorted(
+        [TOOL_CHECK, CUT_SILENCE, capabilities.TRIM_BOUNDARIES]
+    )
 
     for capability in by_id.values():
         assert capability["executable"] is True

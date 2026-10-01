@@ -712,18 +712,270 @@ of the README, steps 19–28.
 - **Cutting cannot yet consume generated clips**, by design. Re-cutting an
   output means adding it as a project source by hand.
 
-## Next: milestone 1B — AI-assisted cutting settings and sample-based comparison
+## Milestone 1B — boundary-only trimming, focused previews, AI-assisted settings
 
-Planned scope, not started:
+Status: complete.
 
-- Let the model propose the five cutting settings for a specific take, as an
-  editable plan referencing the now-registered `edit.cut_silence` capability —
-  the manual path stays the default and keeps working without it.
-- Cut a short sample rather than the whole take, so several settings can be
-  compared cheaply before committing to a full render.
-- Present those samples side by side with their measured durations and removed
-  time, and let the chosen one be applied to the full source.
-- Persist a full source-to-output cut map, and the beginnings of manual
-  boundary editing on top of it.
-- Still out of scope: transcription, captions, zooms, Remotion, B-roll, music,
-  sound effects and OBS control.
+### The clarification that shaped it
+
+The 1A plan for this milestone was "sample a bit of the take and compare
+settings". The actual recording workflow made that the wrong feature. A script
+is recorded as short sections, one successful take per clip, and the clips are
+joined; a mistake is re-recorded, not cut out. What needs removing is the dead
+time at the two ends of each clip. Pauses inside a take are delivery. So the
+default became a mode that cuts each clip exactly twice, and the previews
+became the three places such a cut can be wrong.
+
+Also found on reading the repository: a subtitles module (Whisper) and folder
+upload had been added after 1A and were not described in this file. They are
+untouched by this milestone beyond the merge step now refreshing the cut map.
+
+### What was built
+
+**Backend** (`backend/`):
+
+| File | Role |
+| --- | --- |
+| `boundaries.py` | New. Boundary settings and overrides, the peak envelope, activity detection, end-window analysis with expansion, resolving the retained interval, the analysis cache |
+| `cut_map.py` | New. The versioned source-to-output map, for both modes |
+| `cut_samples.py` | New. Opening / ending / join preview job, sample storage, staleness |
+| `cut_state.py` | New. The cutting screen's live state and the analysis job |
+| `cut_advice.py` | New. The recommendation job, proposal validation, approve-and-apply |
+| `tests/test_boundaries.py` | New. 94 tests |
+| `cutting.py` | Modes, the extended saved configuration and its revision, basis keys, the trim / join-preview / timeline-export commands, run schema 2 |
+| `cut_runner.py` | The per-clip step branches by mode; cut map per clip; merge records per-clip segments |
+| `capabilities.py` | `edit.trim_boundaries` registered, `CATALOG_VERSION` → 3 |
+| `job_tasks.py` | Three job types, and the plan executor for the new capability |
+| `llm.py` | `recommend_cut` on both providers; the Anthropic call shape is shared and unchanged |
+| `plans.py`, `api_ai.py` | An optional `context` on a revision, carried into edits |
+| `api_cutting.py`, `models.py` | The endpoints below |
+
+**Frontend** (`frontend/src/`): `CuttingPanel.tsx` reworked (mode selector,
+per-mode settings, clip list, run details), plus `CutClips.tsx` (boundaries,
+manual start/end, previews), `CutAdvice.tsx` (the recommendation and its
+editable proposal) and `cutFormat.ts`. No new dependency.
+
+Endpoints added, all under `/projects/{id}/cutting`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/state` | For the form as it stands: each clip's boundary, which previews are stale, the recommendation, active and recent cutting jobs. Reads caches; renders nothing |
+| `POST` | `/analysis` | Queue boundary detection |
+| `POST` | `/samples` | Queue preview samples (all, or a named list) |
+| `GET` | `/samples/{sample}/{edited\|source}/stream` | Play a preview file by id |
+| `POST` | `/recommendations` | Queue one AI recommendation, or a revision with feedback |
+| `POST` | `/recommendations/{plan}/revisions/{n}/apply` | Approve and copy into the saved form |
+| `GET` | `/runs/{run}/cut-map` | The run's cut map |
+
+`GET`/`PUT /settings` and `POST /runs` now carry the whole form: `mode`,
+`settings` (full-clip), `boundary_settings`, `overrides`, `sample_seconds`.
+
+### Decisions
+
+**Detection is done here, not by Auto-Editor.** Checked on 31.3.2. Its model is
+"cut every inactive section"; a large `--smooth` MINCUT stops it cutting
+internal pauses but equally stops it cutting an end silence shorter than
+MINCUT, and `--margin` is one pair applied around every section. There is no
+invocation that treats the two ends differently from the inside. Detection is
+a small module over FFmpeg-decoded PCM, in pure Python — `array` slices,
+no NumPy, no new dependency — and is a pure function of an envelope, which is
+what makes it testable without media.
+
+**Rendering is FFmpeg, re-encoded, with `-ss` before `-i`.** Frame-accurate
+and in sync. A stream copy was rejected on purpose: it can only start on a
+keyframe, which would move the cut by up to seconds.
+
+**Levels are measured on the channels as recorded.** Found by running it: the
+first version forced stereo, and FFmpeg attenuates a mono track by 3 dB when
+it spreads it over two channels, so a tone at 0.125 measured 0.088 — the
+threshold would have meant something different for mono and stereo takes.
+There is a test pinning the measured level of FFmpeg's sine source.
+
+**End windows, grown incrementally, never trusted at their edge.** See the
+README for the mechanism. Two things came out of measuring rather than
+assuming: the first version re-decoded from the start on every expansion
+(70.7 s of audio decoded for a 34.7 s silent clip), and let the two windows
+overlap. Both are fixed — each stretch is decoded at most once, and a test
+asserts it. The equivalence with a full scan is a property test over 150
+random clips plus a real-decoder test.
+
+**Two settings sets, never shared.** The threshold has the same meaning in
+both modes; padding does not. Rather than reuse `margin_*` with different
+semantics, boundary-only mode has its own four keys, its validator refuses the
+full-clip names, and the full-clip validator refuses its names. A run records
+only the settings of the mode it ran in; the other is `null`.
+
+**Old things stay what they were.** A saved cutting block with no `mode` is
+full-clip (that is all 1A had). A manifest or a job snapshot with no `mode` is
+full-clip, so retrying an old job runs what it ran. Only a project that never
+saved cutting settings gets the new default. `RUN_SCHEMA_VERSION` is 2; v1
+manifests read unchanged.
+
+**One path to a boundary.** `cut_runner.resolve_boundary` is called by the
+analysis job, every sample and the final render, over one analysis cache keyed
+by file fingerprint and the two detection settings. Padding and overrides are
+applied afterwards by a pure function, so moving them never decodes again.
+
+**Staleness is a key, computed on the server.** `cutting.basis_key` hashes
+exactly what decides a cut: the mode, that mode's settings, and per source its
+id, its file digest and its override, in order. A sample stores the key of the
+sources it shows; the state endpoint recomputes it for the form in the browser
+and compares. Consequences that are tested: a manual change to clip B leaves
+clip A's previews current; tuning the unselected mode invalidates nothing;
+re-recording a take under the same name invalidates its previews.
+
+**The settings revision.** Saved cutting settings carry a revision that goes
+up only when something that moves a cut changes. Previews, recommendations,
+runs and cut maps record it (or `null` for an unsaved form), along with the
+approved AI proposal the settings came from when there is one. The interface
+saves before it queues a preview, a recommendation or a render so that the
+number is always there.
+
+**The recommendation is a plan.** Rather than a parallel approval mechanism, a
+proposal is stored with `plans.create_revision` as one action on
+`edit.trim_boundaries` or `edit.cut_silence`. Editing it is the existing
+"save as new revision"; approving it is the existing approval file;
+`/apply` adds two checks the generic approval cannot know about — the proposal
+must still describe the current configuration, and a mode change must be
+confirmed — and then copies the parameters into the saved form. It renders
+nothing. The plan is also runnable from the plan panel through the existing
+execution job.
+
+**Two capabilities, not a mode parameter.** A plan's capability id then says
+whether internal pauses will be removed, and no parameter edit can turn one
+into the other.
+
+**Manual overrides are not plan parameters.** The plan spec language has no
+per-resource values. A boundary-only plan applies the overrides saved in the
+cutting screen, and the run records them; this is stated in the capability's
+limitations.
+
+**A clip with no audio is kept, with a silent track.** So every clip of a run
+has the same streams and the merge still works. The clip records
+`audio_synthesised: true`.
+
+**Cut maps are never reconstructed.** Boundary-only: the interval given to the
+renderer. Full-clip: Auto-Editor's `--export v3` timeline, verified on 31.3.2
+to carry `start`/`dur`/`offset` in timeline frames and to add up exactly to
+the rendered clip (126 frames, 5.04 s, on the fixture). Either is then checked
+against the measured duration of the rendered file; outside one video frame
+plus two AAC frames the clip's map is marked unavailable rather than offered.
+
+### Measured performance
+
+On this machine, FFmpeg 8.1.2, libx264 `medium` CRF 18. Best of three for the
+analysis figures.
+
+| Clip | Analysis, ends only | Analysis, whole file | Render |
+| --- | --- | --- | --- |
+| 180 s, 1920×1080, 30 fps, synthetic, 352 MB | 0.22 s, 24 s decoded | 0.45 s, 180 s decoded | 63.1 s for 172.6 s kept |
+| 8.2 s, 474×850, real | 0.10 s (one pass) | 0.10 s | 1.8 s for 7.7 s kept |
+| 8.2 s, 474×850, real | 0.11 s (one pass) | 0.11 s | 1.6 s for 7.8 s kept |
+| 34.7 s, 1080×1920, 60 fps, real, no sound | 0.35 s, 34.7 s decoded in three pieces | 0.17 s | 32.6 s for 34.7 s kept |
+
+Rendered durations matched the requested interval within 1–17 ms.
+
+The honest reading: analysing only the ends halves the analysis of a long
+take, and the analysis is under one percent of the work either way. Encoding
+the kept video is the cost, and it is unchanged. For this user's current takes
+(about eight seconds) the windows cover the whole file and save nothing; for a
+soundless clip the expansion is slower than one pass by about two tenths of a
+second. Three of the user's own clips were read for these measurements and
+rendered into a temporary directory that was then deleted; nothing was written
+to the workspace or to the footage folders.
+
+### Checks performed
+
+Automated:
+
+- `.venv\Scripts\python.exe -m pytest backend\tests -q` → **289 passed**
+  (195 existing, 94 new). Two existing tests were adjusted, not weakened: the
+  1A tests' `start_run` helper now names `full_clip` explicitly, since that
+  pipeline is no longer the default, and the capability-catalog invariant
+  test lists the third capability.
+- The new tests, by risk:
+  - leading and trailing silence removed while the internal pause remains —
+    on a synthetic envelope and on a rendered file, where the pause is
+    measured in the output (1.5 s, present);
+  - padding applied, clamped to the source and snapped outward to frames;
+  - sound at the first and last frame preserved;
+  - short, silent, noisy, quiet and no-audio inputs: each kept and flagged;
+  - window expansion equal to a full scan (targeted cases, 150 random clips,
+    and a real decoder), and no stretch decoded twice;
+  - manual overrides validated (eight invalid shapes), bounded by the clip,
+    respected in the render, and `keep whole` honoured;
+  - previews and the final run cutting at identical source times;
+  - cut maps: the rendered duration within tolerance, the concatenated offsets
+    adding up to the merged file, and a source time landing where the sound
+    actually is in the merged video; Auto-Editor's timeline giving two
+    retained sections and an internal removal on the same fixture; seven
+    unusable timelines yielding "unavailable", never a guess;
+  - stale previews and stale proposals detected, and a stale proposal refused;
+  - a mode-changing proposal refused without confirmation;
+  - invalid provider answers failing the job and creating no plan;
+  - cancellation of analysis, of a preview render and of the final render,
+    each leaving nothing half-made; a real decode cancelled;
+  - manual cutting succeeding with a misconfigured provider.
+- `npm.cmd run build` → succeeded, 26 modules.
+- `npm.cmd run lint` → five `set-state-in-effect` warnings, the same count and
+  the same mount-time fetch pattern as before this milestone.
+
+In a real browser: a second backend and dev server were started against a
+throwaway workspace with three generated takes (one with Hebrew in its name,
+one silent), and headless Chrome was driven through the panel — find
+boundaries, render an opening preview (both players loaded, the edited frame
+showing the source timestamp of the detected start), nudge a start and see the
+preview go out of date, render all previews, ask the demo engine for a
+recommendation, approve and apply it, render the run, open its details,
+switch to full-clip mode. No console errors. Screenshots were inspected. The
+user's own running backend, dev server and workspace were not used.
+
+**Not verified, and yours to judge:** how any of this *sounds* on a real voice.
+The fixtures are test tones. Whether 0.15 s and 0.35 s are the right paddings
+for this user's delivery, whether the first consonant survives, whether the
+join has the right rhythm — those need the listening checklist in the README.
+The live Anthropic provider has still never been called from this repository.
+
+### Known limitations
+
+- **Loudness, not speech.** A noise longer than the minimum duration at either
+  end of a take sets the boundary.
+- **One start and one end per clip.** No timeline editor, no internal cuts in
+  boundary-only mode.
+- **Full-clip mode has no previews and no manual boundaries.**
+- **Encoding cost is unchanged** by the analysis optimisation.
+- **Variable-frame-rate sources** are snapped to the nominal frame rate; a
+  clip that drifts past the tolerance loses its cut map, not its render.
+- **Previews and the analysis cache are never pruned.**
+- **The join preview is rendered from the two sources in one pass**, with the
+  same boundaries and encoder settings as the run, whereas the merged video is
+  joined from the rendered clips. The cut points are identical; the encodes
+  are not the same bytes.
+- **A plan's boundary-only run uses the saved manual overrides**, which can
+  change after the plan was approved.
+- **The demo recommendation engine matches a handful of English keywords.**
+- **The mock plan generator's refusal text still says no editing capability
+  exists**, as it has since 1A. Left alone: plan generation is outside this
+  milestone.
+- **Live provider behaviour is unverified**, as before.
+
+### Running it
+
+```powershell
+cd C:\Users\orinesher\Documents\videoFactory
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000
+```
+
+```powershell
+cd C:\Users\orinesher\Documents\videoFactory\frontend
+npm.cmd run dev
+```
+
+Then <http://localhost:5173>. Tests and build:
+
+```powershell
+cd C:\Users\orinesher\Documents\videoFactory
+.\.venv\Scripts\python.exe -m pytest backend\tests -q
+cd .\frontend
+npm.cmd run build
+```

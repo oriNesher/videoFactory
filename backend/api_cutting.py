@@ -19,8 +19,27 @@ import urllib.parse
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import cutting, jobs, job_tasks, player, storage, subtitles
-from .models import SaveCuttingSettingsRequest, StartCuttingRunRequest
+from . import (
+    cut_advice,
+    cut_map,
+    cut_samples,
+    cut_state,
+    cutting,
+    jobs,
+    job_tasks,
+    player,
+    storage,
+    subtitles,
+)
+from .models import (
+    ApplyRecommendationRequest,
+    CuttingAnalysisRequest,
+    CuttingConfiguration,
+    CuttingRecommendationRequest,
+    CuttingSamplesRequest,
+    SaveCuttingSettingsRequest,
+    StartCuttingRunRequest,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/cutting", tags=["cutting"])
 
@@ -34,6 +53,32 @@ def _fail(error: storage.ProjectError) -> HTTPException:
     return HTTPException(status_code=error.status_code, detail=error.message)
 
 
+def _catalog() -> dict:
+    catalog = cutting.settings_catalog()
+    catalog["previews"] = {
+        "kinds": list(cut_samples.KINDS),
+        "source_context_seconds": cut_samples.SOURCE_CONTEXT_SECONDS,
+    }
+    # What an AI recommendation request contains, stated where it is asked for.
+    catalog["advice"] = {
+        "data_sent": cut_advice.DATA_SENT,
+        "data_not_sent": cut_advice.DATA_NOT_SENT,
+    }
+    return catalog
+
+
+def _configuration(project_id: str, form: CuttingConfiguration, **extra) -> dict:
+    """The submitted form, validated, as the raw input of a job or a save.
+
+    Validated here as well as by each job's own validator so that the
+    applied-plan label is checked once, in one place, before anything records
+    it (see `cut_state.clean_applied_plan`).
+    """
+    project = storage.read_project(project_id)
+    configuration = cut_state.normalise(project, form.model_dump())
+    return {**configuration, **extra}
+
+
 @router.get("/settings")
 def get_cutting_settings(project_id: str):
     """The saved form, plus everything needed to render it."""
@@ -44,7 +89,7 @@ def get_cutting_settings(project_id: str):
 
     return {
         "project_id": project["id"],
-        "catalog": cutting.settings_catalog(),
+        "catalog": _catalog(),
         **cutting.read_settings(project),
     }
 
@@ -52,22 +97,156 @@ def get_cutting_settings(project_id: str):
 @router.put("/settings")
 def save_cutting_settings(project_id: str, request: SaveCuttingSettingsRequest):
     try:
-        saved = cutting.save_settings(
-            project_id,
-            {
-                "settings": request.settings,
-                "output_mode": request.output_mode,
-                "source_ids": request.source_ids,
-            },
-        )
+        saved = cutting.save_settings(project_id, _configuration(project_id, request))
     except storage.ProjectError as error:
         raise _fail(error) from error
 
     return {
         "project_id": project_id,
-        "catalog": cutting.settings_catalog(),
+        "catalog": _catalog(),
         **saved,
     }
+
+
+@router.post("/state")
+def describe_cutting_state(project_id: str, request: CuttingConfiguration):
+    """Where each clip would be cut right now, and which results are stale.
+
+    A POST because it carries the form as it stands in the browser, saved or
+    not. It reads caches and writes nothing; it never decodes or renders.
+    """
+    try:
+        state = cut_state.describe(project_id, request.model_dump())
+        state.update(_cutting_jobs(project_id))
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return state
+
+
+def _cutting_jobs(project_id: str) -> dict:
+    """The cutting screen's own jobs: what is active, and how the last one ended.
+
+    `recent_jobs` holds the newest finished job of each kind, so a failed
+    preview or a declined recommendation is shown where it was asked for
+    rather than only in the jobs panel.
+    """
+    watched = (*job_tasks.CUTTING_JOB_TYPES, job_tasks.CUT_MEDIA_JOB)
+    active: list[dict] = []
+    recent: dict[str, dict] = {}
+
+    for record in jobs.list_jobs(project_id):
+        if record["type"] not in watched:
+            continue
+        summary = {
+            "id": record["id"],
+            "type": record["type"],
+            "status": record["status"],
+            "progress_message": record["progress_message"],
+            "progress_percent": record["progress_percent"],
+            "finished_at": record["finished_at"],
+            "error": record["error"],
+            "result": record["result"],
+        }
+        if record["status"] in jobs.ACTIVE_STATUSES:
+            active.append(summary)
+        else:
+            recent.setdefault(record["type"], summary)
+
+    return {"active_jobs": active, "recent_jobs": recent}
+
+
+@router.post("/analysis", status_code=201)
+def start_cutting_analysis(project_id: str, request: CuttingAnalysisRequest):
+    """Queue boundary detection for the selected clips. Returns the job."""
+    try:
+        record = jobs.submit(
+            project_id,
+            job_tasks.CUT_ANALYSIS_JOB,
+            _configuration(project_id, request, force=request.force),
+        )
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return jobs.describe_job(record)
+
+
+@router.post("/samples", status_code=201)
+def start_cutting_samples(project_id: str, request: CuttingSamplesRequest):
+    """Queue preview samples. Returns the job, never a rendered file."""
+    try:
+        record = jobs.submit(
+            project_id,
+            job_tasks.CUT_SAMPLE_JOB,
+            _configuration(project_id, request, samples=request.samples),
+        )
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return jobs.describe_job(record)
+
+
+@router.get("/samples/{sample_id}/{which}/stream")
+def stream_sample(project_id: str, sample_id: str, which: str):
+    """Play one file of a preview: `edited` or `source`. Ids only, no paths."""
+    try:
+        storage.read_project(project_id)
+        path = cut_samples.resolve_file(project_id, sample_id, which)
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return FileResponse(
+        path,
+        media_type=VIDEO_MEDIA_TYPE,
+        # A sample id never repeats and its files never change.
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.post("/recommendations", status_code=201)
+def request_cutting_recommendation(project_id: str, request: CuttingRecommendationRequest):
+    """Queue one AI recommendation. The result is a plan awaiting approval."""
+    try:
+        record = jobs.submit(
+            project_id,
+            job_tasks.CUT_RECOMMENDATION_JOB,
+            _configuration(
+                project_id,
+                request,
+                request=request.request,
+                feedback=request.feedback,
+                revise_plan_id=request.revise_plan_id,
+            ),
+        )
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return jobs.describe_job(record)
+
+
+@router.post("/recommendations/{plan_id}/revisions/{revision}/apply")
+def apply_cutting_recommendation(
+    project_id: str, plan_id: str, revision: int, request: ApplyRecommendationRequest
+):
+    """Approve a recommendation and put its settings into the saved form.
+
+    Refused when the form is no longer the configuration the recommendation
+    was made for, and — without an explicit confirmation — when it would
+    change the cutting mode. Nothing is rendered: that stays a separate press.
+    """
+    try:
+        saved = cut_advice.apply(
+            project_id,
+            plan_id,
+            revision,
+            _configuration(
+                project_id, request, confirm_mode_change=request.confirm_mode_change
+            ),
+        )
+    except storage.ProjectError as error:
+        raise _fail(error) from error
+
+    return {"project_id": project_id, "catalog": _catalog(), **saved}
 
 
 @router.post("/runs", status_code=201)
@@ -79,13 +258,7 @@ def start_cutting_run(project_id: str, request: StartCuttingRunRequest):
     """
     try:
         record = jobs.submit(
-            project_id,
-            job_tasks.CUT_MEDIA_JOB,
-            {
-                "source_ids": request.source_ids,
-                "settings": request.settings,
-                "output_mode": request.output_mode,
-            },
+            project_id, job_tasks.CUT_MEDIA_JOB, _configuration(project_id, request)
         )
     except storage.ProjectError as error:
         raise _fail(error) from error
@@ -142,6 +315,17 @@ def get_cutting_run(project_id: str, run_id: str):
         raise _fail(error) from error
 
     return _describe(project_id, manifest, active)
+
+
+@router.get("/runs/{run_id}/cut-map")
+def get_cut_map(project_id: str, run_id: str):
+    """The run's source-to-output mapping, as written beside its manifest."""
+    try:
+        storage.read_project(project_id)
+        cutting.read_manifest(project_id, run_id)
+        return cut_map.read(project_id, run_id)
+    except storage.ProjectError as error:
+        raise _fail(error) from error
 
 
 @router.post("/runs/{run_id}/open-folder")

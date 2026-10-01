@@ -12,13 +12,19 @@ trimmed clips — with the guarantees the BAT did not offer:
 - cancellation kills the encoder tree and stops the remaining clips *and* the
   join, and the run is recorded as cancelled rather than finished;
 - nothing is called a result until FFprobe has read it back.
+
+Milestone 1B adds a second way to produce each clip. In boundary-only mode the
+retained interval is found by `backend/boundaries.py` and rendered with FFmpeg;
+in full-clip mode Auto-Editor cuts as before. Everything around that one step —
+the manifest, verification, cancellation, the join — is shared, and both modes
+end by writing a cut map (`backend/cut_map.py`).
 """
 
 import os
 import time
 from pathlib import Path
 
-from . import cutting, jobs, media, processes
+from . import boundaries, cut_map, cutting, jobs, media, processes, storage
 
 # Progress is persisted to disk, and the tools emit updates far faster than a
 # person can read them. One write per interval keeps the interface live without
@@ -106,8 +112,94 @@ def _finish(manifest: dict, status: str, error: str | None = None) -> dict:
     manifest["status"] = status
     manifest["finished_at"] = cutting.now()
     manifest["error"] = error
+    # Written for every outcome: a failed run's finished clips are still real
+    # clips, and their maps are still true.
+    cut_map.write(manifest)
     cutting.write_manifest(manifest)
     return manifest
+
+
+def resolve_boundary(
+    project_id: str,
+    source: dict,
+    settings: dict,
+    *,
+    cancelled=None,
+) -> dict:
+    """Where one source will be cut in boundary-only mode.
+
+    The single path to a boundary: the analysis job, every preview sample and
+    the final render all come through here, so they cannot disagree. Detection
+    is read from the project's analysis cache when the same bytes were already
+    analysed with the same detection settings.
+    """
+    detection, reused = boundaries.analyse_source(
+        project_id, source, settings, cancelled=cancelled
+    )
+    resolved = boundaries.resolve(
+        detection,
+        settings,
+        source.get("override"),
+        (source.get("video") or {}).get("frame_rate"),
+    )
+    resolved["analysis"] = {
+        "reused": reused,
+        "full_scan": detection.get("full_scan"),
+        "expansions": detection.get("expansions"),
+        "decoded_seconds": detection.get("decoded_seconds"),
+        "analysis_seconds": detection.get("analysis_seconds"),
+        "windows": detection.get("windows"),
+    }
+    return resolved
+
+
+def _export_timeline(
+    context: jobs.JobContext,
+    directory: Path,
+    number: str,
+    source: dict,
+    settings: dict,
+    described: dict,
+) -> dict:
+    """The cut map of a full-clip clip, from Auto-Editor's own timeline.
+
+    A second, cheap invocation with the same editing flags as the render.
+    Anything that goes wrong here costs the map, never the clip: the video is
+    already rendered and verified.
+    """
+    timeline_path = directory / cutting.LOGS_DIRECTORY / ("clip-%s.v3" % number)
+    timeline_path.parent.mkdir(parents=True, exist_ok=True)
+    command = cutting.build_timeline_export_command(
+        source["path"], str(timeline_path), settings
+    )
+
+    try:
+        result = processes.run(command, cancelled=lambda: context.cancelled)
+    except processes.ProcessStartFailed as error:
+        return cut_map.unavailable(
+            "Auto-Editor's timeline could not be exported: %s" % error.message
+        )
+
+    if not result.ok:
+        return cut_map.unavailable(
+            "Auto-Editor's timeline could not be exported (exit code %d)."
+            % result.exit_code
+        )
+
+    try:
+        timeline = storage.read_json(timeline_path)
+    except (OSError, ValueError):
+        return cut_map.unavailable("Auto-Editor's timeline export could not be read.")
+
+    entry = cut_map.full_clip_entry(
+        timeline,
+        source["duration_seconds"] or 0.0,
+        described["duration_seconds"],
+        described["video"],
+        described["audio"],
+    )
+    entry["timeline_path"] = str(timeline_path.relative_to(directory)).replace("\\", "/")
+    return entry
 
 
 def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict:
@@ -121,7 +213,10 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
     job_input = context.input if job_input is None else job_input
 
     sources = job_input.get("sources") or []
-    settings = job_input["settings"]
+    mode = cutting.job_mode(job_input)
+    boundary_mode = mode == cutting.CUT_MODE_BOUNDARY
+    # The settings of the mode this run is in; the other set is not consulted.
+    settings = job_input["boundary_settings"] if boundary_mode else job_input["settings"]
     output_mode = job_input["output_mode"]
     wants_combined = output_mode in (cutting.MODE_COMBINED, cutting.MODE_BOTH)
 
@@ -190,32 +285,76 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
             "finished_at": None,
         }
 
-        command = cutting.build_cut_command(source["path"], str(output_path), settings)
-        clip["command"] = processes.describe_command(command)
-
-        report(
-            index,
-            0.0,
-            "Cutting clip %d of %d: %s" % (index + 1, len(sources), source["filename"]),
+        label = "%s clip %d of %d: %s" % (
+            "Trimming" if boundary_mode else "Cutting",
+            index + 1,
+            len(sources),
+            source["filename"],
         )
+        report(index, 0.0, label)
 
+        if boundary_mode:
+            # Find the boundary first. Cheap next to the render, and it shares
+            # the cache with the previews, so a clip that was previewed is cut
+            # exactly where the preview was.
+            try:
+                boundary = resolve_boundary(
+                    project_id, source, settings, cancelled=lambda: context.cancelled
+                )
+            except processes.ProcessCancelled:
+                clip["status"] = cutting.CLIP_CANCELLED
+                clip["error"] = "The run was cancelled while this clip was being analysed."
+                clip["finished_at"] = cutting.now()
+                manifest["clips"].append(clip)
+                _mark_remaining_skipped(manifest, sources, index + 1)
+                _finish(manifest, cutting.RUN_CANCELLED, "The run was cancelled at your request.")
+                raise jobs.JobCancelled() from None
+            except storage.ProjectError as error:
+                message = '"%s": %s' % (source["filename"], error.message)
+                clip["error"] = message
+                clip["finished_at"] = cutting.now()
+                manifest["clips"].append(clip)
+                _mark_remaining_skipped(manifest, sources, index + 1)
+                _finish(manifest, cutting.RUN_FAILED, message)
+                raise jobs.JobFailed(message) from error
+
+            clip["boundary"] = boundary
+            for warning in boundary["warnings"]:
+                if warning["severity"] == boundaries.SEVERITY_WARN:
+                    manifest["notes"].append(
+                        '"%s": %s' % (source["filename"], warning["message"])
+                    )
+
+            command = cutting.build_trim_command(
+                source["path"],
+                str(output_path),
+                boundary["start_seconds"],
+                boundary["end_seconds"],
+                has_audio=bool(source.get("audio")),
+            )
+            clip["audio_synthesised"] = not source.get("audio")
+        else:
+            command = cutting.build_cut_command(source["path"], str(output_path), settings)
+
+        clip["command"] = processes.describe_command(command)
         throttle = _Throttle()
 
         def on_output(
             chunk: str,
             _index: int = index,
-            _source: dict = source,
+            _label: str = label,
             _throttle: _Throttle = throttle,
+            _length: float = clip.get("boundary", {}).get("retained_seconds", 0.0),
         ) -> None:
-            fraction = cutting.parse_machine_progress(chunk)
+            # FFmpeg reports encoded time, Auto-Editor rendered frames; both
+            # are real ratios of the work done.
+            if boundary_mode:
+                fraction = cutting.parse_ffmpeg_progress(chunk, _length)
+            else:
+                fraction = cutting.parse_machine_progress(chunk)
             if fraction is None or not _throttle.ready():
                 return
-            report(
-                _index,
-                fraction,
-                "Cutting clip %d of %d: %s"
-                % (_index + 1, len(sources), _source["filename"]),
-            )
+            report(_index, fraction, _label)
 
         try:
             result = processes.run(
@@ -249,7 +388,7 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         # Everything cut away is a real outcome, not a crash: Auto-Editor says
         # so and exits non-zero, and the clip has to be named and explained
         # rather than quietly missing from the joined video later.
-        if cutting.is_empty_timeline(result.output):
+        if not boundary_mode and cutting.is_empty_timeline(result.output):
             clip["status"] = cutting.CLIP_EMPTY
             clip["duration_seconds"] = 0.0
             clip["removed_seconds"] = source["duration_seconds"]
@@ -262,8 +401,13 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
 
         if not result.ok:
             message = (
-                'Auto-Editor failed on "%s" (exit code %d).\n%s'
-                % (source["filename"], result.exit_code, result.last_lines())
+                '%s failed on "%s" (exit code %d).\n%s'
+                % (
+                    "FFmpeg" if boundary_mode else "Auto-Editor",
+                    source["filename"],
+                    result.exit_code,
+                    result.last_lines(),
+                )
             )
             clip["error"] = message
             manifest["clips"].append(clip)
@@ -295,6 +439,30 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
             max(source_duration - described["duration_seconds"], 0.0), 3
         )
 
+        # The source intervals that were kept. In boundary-only mode that is
+        # the interval just rendered; in full-clip mode Auto-Editor is asked
+        # for the timeline it used. Never reconstructed from durations.
+        if boundary_mode:
+            clip["cut_map"] = cut_map.boundary_entry(
+                clip["boundary"],
+                described["duration_seconds"],
+                described["video"],
+                described["audio"],
+            )
+        else:
+            try:
+                clip["cut_map"] = _export_timeline(
+                    context, directory, number, source, settings, described
+                )
+            except processes.ProcessCancelled:
+                clip["cut_map"] = cut_map.unavailable(
+                    "The run was cancelled before the timeline was exported."
+                )
+                manifest["clips"].append(clip)
+                _mark_remaining_skipped(manifest, sources, index + 1)
+                _finish(manifest, cutting.RUN_CANCELLED, "The run was cancelled at your request.")
+                raise jobs.JobCancelled() from None
+
         manifest["clips"].append(clip)
         cutting.write_manifest(manifest)
 
@@ -307,7 +475,9 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
         # version of it: if one take explains the outcome, that is the message
         # worth showing.
         empty = [c for c in manifest["clips"] if c["status"] == cutting.CLIP_EMPTY]
-        if len(empty) == 1 and empty[0].get("error"):
+        if not empty:
+            message = "No clip was produced."
+        elif len(empty) == 1 and empty[0].get("error"):
             message = empty[0]["error"]
         else:
             message = (
@@ -344,15 +514,22 @@ def run_cutting(context: jobs.JobContext, job_input: dict | None = None) -> dict
     empty = [clip for clip in manifest["clips"] if clip["status"] == cutting.CLIP_EMPTY]
     combined = manifest.get("combined") or {}
 
+    review = [
+        clip for clip in produced if (clip.get("boundary") or {}).get("needs_review")
+    ]
+
     return {
         "run_id": run_id,
+        "mode": mode,
         "output_mode": manifest["output_mode"],
+        "needs_review_count": len(review),
+        "cut_map_available": bool((manifest.get("cut_map") or {}).get("available")),
         "clip_count": len(produced),
         "empty_clip_count": len(empty),
         "combined_output_id": combined.get("output_id"),
         "combined_strategy": combined.get("strategy"),
         "combined_complete": combined.get("complete"),
-        "summary": _summarise(manifest, produced, empty, combined),
+        "summary": _summarise(manifest, produced, empty, combined, review),
     }
 
 
@@ -404,11 +581,22 @@ def merge_run(context: jobs.JobContext, run_id: str) -> dict:
         cutting.write_manifest(manifest)
         raise
 
+    # The clips now have real positions in a joined file; say so in the map.
+    cut_map.write(manifest)
+    cutting.write_manifest(manifest)
     return manifest["combined"]
 
 
-def _summarise(manifest: dict, produced: list, empty: list, combined: dict) -> str:
+def _summarise(
+    manifest: dict, produced: list, empty: list, combined: dict, review: list | None = None
+) -> str:
     parts = ["Produced %d trimmed clips from %d sources." % (len(produced), len(manifest["sources"]))]
+
+    if review:
+        parts.append(
+            "%d of them had no confident boundary and need a look: %s."
+            % (len(review), ", ".join(clip["source_filename"] for clip in review))
+        )
 
     if empty:
         parts.append("%d files yielded no content and were left out." % len(empty))
@@ -547,6 +735,24 @@ def _combine(
         if end is not None
     )
     combined["trimmed_black_seconds"] = round(trimmed, 3)
+
+    # Where each clip lands in the joined file: what the cut map's sequence
+    # positions are built from. A clip whose black tail is dropped contributes
+    # less than its own duration, which is why this is recorded here rather
+    # than re-derived from the clips later.
+    segments = []
+    cursor = 0.0
+    for end, clip in zip(ends, produced):
+        length = end if end is not None else (clip.get("duration_seconds") or 0.0)
+        segments.append(
+            {
+                "output_id": clip["output_id"],
+                "start_seconds": round(cursor, 6),
+                "duration_seconds": round(length, 6),
+            }
+        )
+        cursor += length
+    combined["segments"] = segments
     combined["expected_duration_seconds"] = round(
         combined["expected_duration_seconds"] - trimmed, 3
     )

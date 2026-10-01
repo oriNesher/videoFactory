@@ -3,7 +3,10 @@ import type {
   CapabilityCatalog,
   CutRun,
   CutRunListing,
+  CuttingForm,
   CuttingSettings,
+  CuttingState,
+  SampleRequest,
   Job,
   JobListing,
   LlmStatus,
@@ -228,37 +231,99 @@ export function getCuttingSettings(projectId: string) {
   return request<CuttingSettings>(`/projects/${projectId}/cutting/settings`)
 }
 
-export function saveCuttingSettings(
-  projectId: string,
-  settings: Record<string, number>,
-  outputMode: string,
-  sourceIds: string[],
-) {
+export function saveCuttingSettings(projectId: string, form: CuttingForm) {
   return request<CuttingSettings>(`/projects/${projectId}/cutting/settings`, {
     method: 'PUT',
-    body: JSON.stringify({
-      settings,
-      output_mode: outputMode,
-      source_ids: sourceIds,
-    }),
+    body: JSON.stringify(form),
   })
 }
 
 /** Returns the queued *job*: cutting always runs through the job queue. */
-export function startCuttingRun(
-  projectId: string,
-  sourceIds: string[],
-  settings: Record<string, number>,
-  outputMode: string,
-) {
+export function startCuttingRun(projectId: string, form: CuttingForm) {
   return request<Job>(`/projects/${projectId}/cutting/runs`, {
     method: 'POST',
+    body: JSON.stringify(form),
+  })
+}
+
+/**
+ * Where each clip would be cut for the form as it stands, and which previews
+ * and recommendation are still about that form. Reads caches; renders nothing.
+ */
+export function getCuttingState(projectId: string, form: CuttingForm) {
+  return request<CuttingState>(`/projects/${projectId}/cutting/state`, {
+    method: 'POST',
+    body: JSON.stringify(form),
+  })
+}
+
+/** Queues boundary detection for the selected clips. */
+export function startCuttingAnalysis(projectId: string, form: CuttingForm) {
+  return request<Job>(`/projects/${projectId}/cutting/analysis`, {
+    method: 'POST',
+    body: JSON.stringify(form),
+  })
+}
+
+/** Queues preview samples; without `samples`, every preview the selection allows. */
+export function startCuttingSamples(
+  projectId: string,
+  form: CuttingForm,
+  samples?: SampleRequest[],
+) {
+  return request<Job>(`/projects/${projectId}/cutting/samples`, {
+    method: 'POST',
+    body: JSON.stringify({ ...form, samples: samples ?? null }),
+  })
+}
+
+/** A preview file by id. `source` does not exist for a join preview. */
+export function sampleUrl(
+  projectId: string,
+  sampleId: string,
+  which: 'edited' | 'source',
+) {
+  return `/api/projects/${projectId}/cutting/samples/${sampleId}/${which}/stream`
+}
+
+/** Queues one AI recommendation; `revisePlanId` asks for a revision with feedback. */
+export function requestCutRecommendation(
+  projectId: string,
+  form: CuttingForm,
+  requestText: string,
+  feedback?: string,
+  revisePlanId?: string,
+) {
+  return request<Job>(`/projects/${projectId}/cutting/recommendations`, {
+    method: 'POST',
     body: JSON.stringify({
-      source_ids: sourceIds,
-      settings,
-      output_mode: outputMode,
+      ...form,
+      request: requestText,
+      feedback: feedback ?? null,
+      revise_plan_id: revisePlanId ?? null,
     }),
   })
+}
+
+/** Approves a recommendation and saves its settings into the form. */
+export function applyCutRecommendation(
+  projectId: string,
+  planId: string,
+  revision: number,
+  form: CuttingForm,
+  confirmModeChange: boolean,
+) {
+  return request<CuttingSettings>(
+    `/projects/${projectId}/cutting/recommendations/${planId}/revisions/${revision}/apply`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...form, confirm_mode_change: confirmModeChange }),
+    },
+  )
+}
+
+export function cutMapUrl(projectId: string, runId: string) {
+  return `/api/projects/${projectId}/cutting/runs/${runId}/cut-map`
 }
 
 export function listCuttingRuns(projectId: string) {

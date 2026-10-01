@@ -368,8 +368,15 @@ def create_revision(
     provider: dict,
     instruction: Any,
     plan_id: str | None = None,
+    context: dict | None = None,
 ) -> dict:
-    """Validate a proposal or an edit and persist it as the next revision."""
+    """Validate a proposal or an edit and persist it as the next revision.
+
+    `context` is an optional, backend-written note about where the proposal
+    came from — for a cutting recommendation, which settings it was based on
+    and the limitations it stated. It is stored and returned as is; it carries
+    no action and is never sent to a model.
+    """
     project_id = project["id"]
     validated_summary = validate_summary(summary)
     validated_actions = validate_actions(project, actions)
@@ -407,6 +414,7 @@ def create_revision(
         "input_snapshot": resources.input_snapshot(project),
         "summary": validated_summary,
         "actions": validated_actions,
+        "context": context if isinstance(context, dict) else None,
     }
 
     # Retry on the (single-user, very unlikely) race of two revisions at once.

@@ -650,3 +650,154 @@ button.vlc:hover:not(:disabled) {
   background: #d97a00;
   border-color: #d97a00;
 }
+
+/* --- cutting modes, boundaries and previews (milestone 1B) ----------------- */
+
+.mode-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.mode-choice legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mode-option.active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.mode-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mode-option strong {
+  color: var(--text-h);
+}
+
+.mode-option .badge {
+  align-self: flex-start;
+}
+
+/* Four boundary settings plus the preview length. */
+.boundary-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.advice-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.boundary-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.boundary-field {
+  margin: 0;
+  gap: 4px;
+}
+
+.boundary-field input[type='number'] {
+  font: inherit;
+  font-size: 15px;
+  width: 110px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  /* Seconds read left-to-right whatever the direction of the page. */
+  direction: ltr;
+}
+
+.boundary-field .row {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.previews {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.preview-slot .job-header {
+  margin-bottom: 4px;
+}
+
+.preview.stale video {
+  opacity: 0.55;
+}
+
+.preview-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.preview-files figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.preview-files figcaption {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.preview-files video {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+
+.advice {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+button.example {
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+/* File names keep their own direction inside an English sentence. */
+bdi {
+  unicode-bidi: isolate;
+}
+
+@media (max-width: 760px) {
+  .mode-choice {
+    grid-template-columns: 1fr;
+  }
+}

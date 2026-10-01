@@ -120,6 +120,9 @@ def save_plan_revision(
             provider=latest["provider"],
             instruction=latest["instruction"],
             plan_id=plan_id,
+            # An edited cutting recommendation is still one: it keeps the note
+            # of which settings it was based on, so it can still go stale.
+            context=latest.get("context"),
         )
     except storage.ProjectError as error:
         raise _fail(error) from error
