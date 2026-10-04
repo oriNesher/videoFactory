@@ -92,6 +92,60 @@ class SaveSubtitleSettingsRequest(BaseModel):
     settings: Any = None
 
 
+class CaptionImportRequest(BaseModel):
+    """`path` omitted means: open the machine's file dialog and ask."""
+
+    path: Any = None
+
+
+class CaptionSelectionRequest(BaseModel):
+    input_key: Any = None
+
+
+class CaptionTranscriptionRequest(BaseModel):
+    input_key: Any = None
+    settings: Any = None
+    # Make a new transcript even when a matching one exists.
+    force: Any = None
+
+
+class ModelDownloadRequest(BaseModel):
+    model: Any = None
+
+
+class CaptionValidateRequest(BaseModel):
+    captions: Any = None
+
+
+class CaptionOperationRequest(BaseModel):
+    captions: Any = None
+    operation: Any = None
+    caption_id: Any = None
+    word_index: Any = None
+    at_seconds: Any = None
+
+
+class CaptionRevisionRequest(BaseModel):
+    base_revision: Any = None
+    captions: Any = None
+
+
+class CaptionRegroupRequest(BaseModel):
+    base_revision: Any = None
+    grouping: Any = None
+    confirm_discard_edits: Any = None
+
+
+class CaptionStyleRequest(BaseModel):
+    style: Any = None
+
+
+class CaptionExportRequest(BaseModel):
+    transcript_id: Any = None
+    revision: Any = None
+    format: Any = None
+
+
 class StartSubtitlesRequest(BaseModel):
     """The model and the language are fixed by the backend, not requested."""
 

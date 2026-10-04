@@ -22,7 +22,9 @@ RESOURCE_CATALOG_VERSION = 2
 # Settings blocks that belong to a module's own form rather than to what a plan
 # would do. A plan carries its own parameters, so nudging the cutting threshold
 # in the interface must not mark every existing plan outdated.
-FINGERPRINT_EXCLUDED_SETTINGS = frozenset({cutting.SETTINGS_KEY})
+# The captions block (selected video, imports, style, grouping) is the captions
+# screen's own state for the same reason.
+FINGERPRINT_EXCLUDED_SETTINGS = frozenset({cutting.SETTINGS_KEY, "captions"})
 
 MEDIA_TYPE_VIDEO = "video"
 

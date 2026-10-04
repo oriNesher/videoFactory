@@ -22,10 +22,7 @@ fingerprint with the project's current one, so a plan cannot claim to be current
 after the project changed underneath it.
 """
 
-import json
-import os
 import re
-import time
 import unicodedata
 import uuid
 from datetime import datetime, timezone
@@ -286,34 +283,7 @@ def _write_revision_exclusively(path: Path, document: dict) -> None:
     The content is written to a temp file first and then hard-linked into place;
     `os.link` fails if the target exists, which gives both properties at once.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(document, ensure_ascii=False, indent=2)
-    temporary = path.parent / (".%s.tmp" % uuid.uuid4().hex[:12])
-
-    try:
-        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-
-        for attempt in range(storage.WRITE_ATTEMPTS):
-            try:
-                os.link(temporary, path)
-                break
-            except FileExistsError:
-                raise
-            except OSError:
-                # Either a transient Windows sharing violation, or a filesystem
-                # without hard links. Retry, then fall back to a checked
-                # replace, which still keeps atomicity for readers.
-                if attempt < storage.WRITE_ATTEMPTS - 1:
-                    time.sleep(storage.WRITE_RETRY_SECONDS)
-                    continue
-                if path.exists():
-                    raise FileExistsError(path) from None
-                storage.replace_with_retry(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    storage.write_json_exclusive(path, document)
 
 
 def _read_revision_file(project_id: str, plan_id: str, revision: int) -> dict:

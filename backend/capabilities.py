@@ -15,13 +15,14 @@ there is no parameter type that could hold one.
 
 from typing import Any
 
-from . import boundaries, cutting, storage
+from . import boundaries, captions, cutting, storage
 from .tools import TOOL_LABELS, TOOL_NAMES
 
 # Bumped whenever a capability is added, removed or its parameters change.
 # Plans record the version they were generated against.
 # 3: `edit.trim_boundaries` added (milestone 1B).
-CATALOG_VERSION = 3
+# 4: `captions.transcribe` added (stage 2A).
+CATALOG_VERSION = 4
 
 # Kinds are how a capability is classified for the user. `diagnostic` means it
 # inspects the machine and reports; it never touches video.
@@ -36,6 +37,7 @@ KIND_LABELS = {
 TOOL_CHECK = "diagnostics.tool_check"
 CUT_SILENCE = "edit.cut_silence"
 TRIM_BOUNDARIES = "edit.trim_boundaries"
+TRANSCRIBE = "captions.transcribe"
 
 # Which capability implements which cutting mode. Two capabilities rather than
 # one with a `mode` parameter: a plan's capability id then says, by itself,
@@ -220,15 +222,57 @@ CAPABILITIES: dict[str, dict] = {
             "Output is always MP4 (H.264 + AAC) at the source dimensions.",
         ],
     },
+    TRANSCRIBE: {
+        "id": TRANSCRIBE,
+        "version": 1,
+        "kind": KIND_EDITING,
+        "title": "Transcribe speech for captions (Whisper)",
+        "purpose": (
+            "Transcribes the speech in one project video locally with Whisper, "
+            "with word-level timestamps, and groups it into editable captions. "
+            "The captions are then reviewed, styled and exported in the Captions "
+            "section. Reuses an existing transcript of the same video made with "
+            "the same settings instead of transcribing again."
+        ),
+        "executable": True,
+        "resource_types": ["video"],
+        "max_resources": 1,
+        "min_resources": 1,
+        "parameters": {
+            "model": {
+                "type": "string",
+                "required": False,
+                "choices": [model["id"] for model in captions.MODELS],
+                "default": captions.DEFAULT_MODEL,
+                "description": "The Whisper model. It must already be downloaded.",
+            },
+            "language": {
+                "type": "string",
+                "required": False,
+                "choices": sorted(captions.LANGUAGE_CODES),
+                "default": captions.DEFAULT_LANGUAGE,
+                "description": "The spoken language; \"auto\" detects it.",
+            },
+        },
+        "limitations": [
+            "Only project footage can be named in a plan; cutting outputs and "
+            "imported videos are transcribed from the Captions section.",
+            "Transcription is faithful: it never rewrites, shortens or translates "
+            "what was said.",
+            "Exporting burned-in captions or an SRT is done in the Captions "
+            "section after review, not by a plan.",
+            "Runs on the CPU; the model must be downloaded beforehand.",
+        ],
+    },
 }
 
 # Areas the user may well ask about, which have no capability yet. This list is
 # text for the model's benefit only — nothing here can be referenced by a plan.
 NOT_YET_SUPPORTED = [
-    "Subtitles through a plan (subtitles are made with the Subtitles button on "
-    "a cut run, not through an editing plan)",
+    "Caption export through a plan (captions are reviewed, styled and exported "
+    "in the Captions section)",
     "Zooms and effects",
-    "B-roll and layer composition (Remotion)",
+    "B-roll and other overlay layers",
     "Background music and sound effects",
     "Final export and recording (OBS)",
 ]

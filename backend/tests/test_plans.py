@@ -119,9 +119,10 @@ def test_capability_catalog_only_lists_implemented_capabilities(client):
     catalog = client.get("/capabilities").json()
     by_id = {capability["id"]: capability for capability in catalog["capabilities"]}
 
-    # Milestone 1B registers boundary-only trimming alongside it.
+    # Milestone 1B registers boundary-only trimming alongside it; stage 2A
+    # registers transcription for captions.
     assert sorted(by_id) == sorted(
-        [TOOL_CHECK, CUT_SILENCE, capabilities.TRIM_BOUNDARIES]
+        [TOOL_CHECK, CUT_SILENCE, capabilities.TRIM_BOUNDARIES, capabilities.TRANSCRIBE]
     )
 
     for capability in by_id.values():

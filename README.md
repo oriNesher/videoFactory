@@ -9,13 +9,13 @@ configure a real AI provider, asking for an editing plan sends text and
 metadata — never media — to that provider. See
 [AI plans](#ai-plans-mock-mode-and-the-real-provider).
 
-Current state: **milestone 1B** — projects, background jobs, structured AI
-editing plans, subtitles, and cutting in two modes: **boundary-only trimming**
-(the default: removes the dead time around each take and keeps the pauses
-inside it), and the original **full-clip silence removal** with Auto-Editor.
-Boundary-only mode has focused previews, manual start/end adjustment,
-AI-assisted settings and a source-to-output cut map. See
-[docs/PROGRESS.md](docs/PROGRESS.md).
+Current state: **stage 2A** — projects, background jobs, structured AI
+editing plans, cutting in two modes (**boundary-only trimming**, the default,
+and **full-clip silence removal** with Auto-Editor), and now **captions**:
+local Hebrew transcription with Whisper, editable caption revisions, one
+caption template with a few style controls, a live Remotion preview, and
+export as an MP4 with burned-in captions or as an SRT. See
+[Captions](#captions-stage-2a) and [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Requirements
 
@@ -28,9 +28,12 @@ Already verified on this machine:
 | npm | 11.4.2 |
 | FFmpeg / FFprobe | 8.1.2 (`C:\tools`) |
 | Auto-Editor | 31.3.2 (`C:\tools`) |
-| faster-whisper | in `.venv`, from `requirements.txt` |
+| faster-whisper | 1.2.1 in `.venv` (CTranslate2 4.8.2), from `requirements.txt` |
+| Remotion | 4.0.532 (`remotion`, `@remotion/player`, `@remotion/media`, `@remotion/bundler`, `@remotion/renderer`) in `frontend/node_modules` |
 
-FFmpeg, FFprobe and Auto-Editor must be reachable through `PATH`.
+FFmpeg, FFprobe, Auto-Editor and Node.js (`node`) must be reachable through
+`PATH`. Remotion is free for individuals and companies of up to three people;
+larger companies need a [Remotion company license](https://www.remotion.dev/license).
 
 ## Configuration (Windows PowerShell)
 
@@ -134,13 +137,16 @@ executable expression — there is no field that could hold one. The model
 proposes; the backend validates; **you** approve. Nothing runs without an
 explicit approval and an explicit **Run** press.
 
-Three capabilities are registered: `diagnostics.tool_check` (a diagnostic),
-`edit.trim_boundaries` (boundary-only trimming, milestone 1B) and
-`edit.cut_silence` (full-clip silence removal, milestone 1A). Two capabilities
-rather than one with a mode parameter: a plan's capability id says by itself
-whether pauses inside a clip will be removed. Captions, zooms, B-roll and audio
-are still not registered, so a request for them is answered with an explanation
-rather than an invented plan.
+Four capabilities are registered: `diagnostics.tool_check` (a diagnostic),
+`edit.trim_boundaries` (boundary-only trimming, milestone 1B),
+`edit.cut_silence` (full-clip silence removal, milestone 1A) and
+`captions.transcribe` (Whisper transcription of one footage file into
+editable captions, stage 2A). Two cutting capabilities rather than one with a
+mode parameter: a plan's capability id says by itself whether pauses inside a
+clip will be removed. Caption *export* is not a plan capability — captions are
+reviewed and exported in the Captions section — and zooms, B-roll and audio
+are still not registered, so a request for them is answered with an
+explanation rather than an invented plan.
 
 **Cutting does not need AI.** The normal flow is the **Cutting** section: set
 the numbers, look at the previews, press **Render clips and merged video**. No
@@ -550,7 +556,243 @@ failure, not a result.
   one advance the bar at different speeds.
 - **Runs are never pruned.** Delete a run directory by hand to reclaim space.
 
-## Subtitles with Whisper
+## Captions (stage 2A)
+
+The **Captions** section of a video (below **Cutting**) turns speech into
+captions you can correct, style, preview and export. Everything runs on this
+computer; nothing in it needs an AI key or an internet connection once the
+model and the renderer are set up.
+
+### First-time setup (once per machine)
+
+Everything below is either already done on this machine or an explicit button
+in the interface — nothing downloads behind your back.
+
+1. **Python packages** (faster-whisper):
+
+   ```powershell
+   cd C:\Users\orinesher\Documents\videoFactory
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   ```
+
+2. **Frontend and Remotion packages:**
+
+   ```powershell
+   cd C:\Users\orinesher\Documents\videoFactory\frontend
+   npm.cmd install
+   ```
+
+3. **A Whisper model.** If the chosen model is not on disk, the Captions
+   section says so and offers **Download model**. That is the only step that
+   needs the internet; the model goes into the Hugging Face cache
+   (`%USERPROFILE%\.cache\huggingface\hub`) and transcription then runs
+   offline. The default, *ivrit.ai large-v3 turbo*, is about 1.6 GB and is
+   already downloaded here, as is *Whisper medium*.
+
+4. **The renderer.** Remotion renders with its own headless Chrome (about
+   100 MB, kept in `frontend\node_modules\.remotion`). Press **Prepare
+   renderer** in the Export step, or run it by hand:
+
+   ```powershell
+   cd C:\Users\orinesher\Documents\videoFactory\frontend
+   node scripts\render-captions.mjs --setup
+   ```
+
+   Already done on this machine. A render never downloads the browser itself:
+   if it is missing, the export fails with a message pointing at the button.
+
+### The workflow
+
+1. **Video.** Pick what to caption: a finished cutting output (a trimmed clip
+   or the merged video of a successful run), one of the project's footage
+   files, or **Import a video…** — a finished video edited elsewhere, added for
+   captioning only (it does not become cutting footage). The video's size,
+   frame rate, duration and any note about variable frame rate are shown.
+2. **Transcription.** Choose the model, the language (Hebrew by default;
+   "Detect automatically" is available), the device (CPU; NVIDIA GPU only if
+   CTranslate2 can see one — otherwise the option is disabled with the reason)
+   and the precision (`int8` on CPU). Press **Transcribe**. It runs in the
+   background job queue with a cancel button. If this exact video was already
+   transcribed with the same settings, that transcript is reused instantly;
+   **Transcribe again** always makes a new one and keeps the old.
+3. **Review and correct.** The preview player on the left is the real
+   composition; the caption list on the right is the draft. Per caption: ▶
+   seeks to it, the start/end fields (± 0.05 s buttons) move it, the text
+   field corrects it, **Split…** splits it before a chosen word, **Merge ↓**
+   joins it with the next, **Remove** deletes it. Problems are shown on the
+   caption with what to do. **Save captions** stores a new revision; the
+   **Revision** list reopens any earlier one.
+4. **Grouping and style.** Grouping (words per caption, line length, pause,
+   punctuation, minimum time on screen) is applied with **Regroup from the
+   transcript**, which creates a new revision. Style (font, weight, size,
+   colour, outline or box, vertical position, safe margin, line width,
+   optional word highlight) shows in the preview immediately and is saved
+   with **Save style**.
+5. **Export.** **Export MP4 with captions** renders the saved revision with
+   the saved style; **Export SRT** writes the same captions as a subtitle
+   file. Both run as background jobs and appear in the list underneath with
+   Play/Download links.
+
+**SRT is text and timing only.** The burned-in look (font, colour, outline,
+position) exists only in the MP4. An SRT is shown by each player or editor in
+its own style.
+
+### Rules worth knowing
+
+- **Transcripts are faithful.** Whisper's words are shown as heard; nothing
+  rewrites, shortens or translates them. Correct them by hand.
+- **The raw transcript is never edited.** Corrections, timing changes,
+  splits and merges live in caption revisions on top of it. Style lives
+  separately again. Changing style or grouping never re-runs Whisper.
+- **Every save is a new revision.** Nothing overwrites a revision. Saving on
+  top of a revision that is no longer the latest is refused, so two tabs
+  cannot silently overwrite each other.
+- **Regrouping and manual edits.** Regrouping rebuilds captions from the
+  transcript. If the current revision has manual corrections, it asks first
+  and says which revision keeps them.
+- **Word timing.** Each caption keeps Whisper's word times while its text has
+  the same number of words (a spelling fix keeps them). If you add or remove
+  a word, or move the caption away from its words, the caption falls back to
+  **Group timing** — it is shown whole, from its start to its end, and the
+  reason is shown on it. Alignment is never guessed.
+- **Splitting.** With word timing, each part keeps its words' real times.
+  Without it, the split happens at the player position if that lies inside
+  the caption, otherwise at a point proportional to the text — marked as an
+  estimate to check.
+- **Timing validation.** Times must be numbers, start ≥ 0, end after start,
+  end within the video (up to 0.05 s past the measured end is clamped). Captions must be in order
+  and must not overlap; back-to-back is fine. Overlaps show a **Fix overlaps**
+  button that trims each end to the next start and never moves a start.
+- **A changed video.** Every transcript, revision and export records the
+  input's key and its content fingerprint. If the file behind a key changes
+  (a re-recorded take with the same name), its transcripts are marked **OUT OF
+  DATE**, become read-only, are not drawn over the new video, and cannot be
+  exported. Nothing is deleted; transcribe the new video.
+- **Switching videos** never deletes anything; each video keeps its own
+  transcripts and exports.
+
+### Timing and frame rate
+
+- **Composition.** Width and height are the video's *displayed* size (a phone
+  clip with a 90° rotation flag is portrait). An odd side gets one extra black
+  pixel because H.264 4:2:0 needs even sizes. Nothing is cropped or stretched:
+  the video is letterboxed into the frame.
+- **Frame rate.** A constant-rate video (nominal and average rates agree
+  within 0.2 %) keeps its exact rate, 29.97 included. A variable-rate video —
+  most phone recordings — whose nominal rate is a standard one, with an
+  average within 3 % of it, uses the nominal rate (a "30 fps" phone take
+  averaging 29.88 is rendered at 30). Otherwise the average is snapped to the
+  nearest standard rate within 3 %, or rounded. The interface says when a
+  video is variable-rate. The render picks source frames by timestamp, so
+  audio stays in sync; a frame may be repeated or skipped where the source's
+  own timing was uneven. No full-video re-encode happens beforehand.
+- **Length.** `duration_in_frames = round(duration × fps)`, never 0.
+- **Seconds → frames** (`frontend/src/captions/timing.ts`). Frame *f* shows
+  the instant *f / fps*. A caption `[start, end)` is on screen on frames
+  `ceil(start·fps) … ceil(end·fps) − 1`, computed from absolute seconds
+  every time (no accumulated drift), with a 1e-6 tolerance for
+  floating-point noise. Back-to-back captions meet on one frame boundary. A
+  caption shorter than one frame is given one frame.
+- **Audio.** The video's own track is the only audio in the composition, so
+  it is present exactly once. Measured on the test fixture: the tone starts at
+  the same time (within 0.02 ms) and at the same loudness in the export.
+- **Export check.** Every MP4 is read back with FFprobe: exactly one H.264
+  video and one AAC audio stream, the composition's size, and a duration
+  within one frame plus 0.05 s (AAC padding) of `duration_in_frames / fps`.
+  A file that fails is deleted and the export is marked failed.
+
+### Preview and render are one composition
+
+`frontend/src/captions/CaptionedVideo.tsx` is rendered by both the in-app
+`<Player>` and the Node render script (`frontend/scripts/render-captions.mjs`,
+bundled from `frontend/src/remotion/index.ts`). The backend builds the
+render's props from the saved revision and style with the same shape the
+preview uses; positioning, wrapping, RTL and timing are therefore decided by
+one piece of code.
+
+- **Media access.** The preview plays the video from
+  `/projects/<id>/captions/inputs/<key>/stream` — a key, never a path. The
+  renderer serves only the snapshot's input file, on `127.0.0.1`, on a random
+  port, under a random token, for the duration of the render.
+- **Fonts.** Heebo, Rubik and Noto Sans Hebrew (SIL Open Font License 1.1),
+  variable weight, Hebrew and Latin subsets, bundled from the
+  `@fontsource-variable` packages. The render waits for them before
+  capturing a frame; no font is requested from the internet.
+- **Right-to-left.** The caption's direction follows the transcript language
+  (`he` → right-to-left), not the first letter, so a Hebrew line starting with
+  an English word is still right-to-left. Mixed Hebrew/English, numbers and
+  punctuation are ordered by the browser's bidi algorithm; text is never
+  reversed. SRT lines are wrapped in RIGHT-TO-LEFT MARKs for players that
+  default to left-to-right.
+- **Safe placement.** Vertical position 0–100 % is measured inside the safe
+  margin, anchoring the matching point of the caption block, so even a
+  three-line caption cannot cross the margin. Font size is a percentage of the
+  shorter side, so a portrait and a landscape video look alike.
+
+### Exports
+
+- **Immutable snapshot.** Pressing Export freezes the input (key, path,
+  fingerprint, metadata), the revision's captions, the saved style, the
+  composition and the encoder settings into the job. Editing captions or
+  style afterwards — or retrying the job later — cannot change what it
+  renders. Before rendering, the input's fingerprint is checked again.
+- **Encoding.** H.264 (`yuv420p`, CRF 18, x264 `medium`) + AAC 192 kb/s,
+  `.mp4`, at the composition's size.
+- **Cancellation** kills the render's whole process tree (Node, headless
+  Chrome, the encoder) and deletes the partial file; the export is listed as
+  cancelled, never as a result. A render is written to `.partial.mp4` and
+  renamed only after FFprobe verification.
+- **Retry** (in Background jobs) renders the original snapshot into a new
+  export folder.
+
+### Where captions are stored
+
+```
+workspace\projects\<project-id>\captions\transcripts\<transcript-id>\
+  transcript.json          raw Whisper result: words, timestamps, input, fingerprint, model, settings
+  revisions\rev-0001.json  caption revisions (immutable)
+  logs\whisper.log
+workspace\projects\<project-id>\exports\captions\<export-id>\
+  export.json              status, what it was made from, FFprobe verification
+  snapshot.json            the exact captions, style and composition rendered
+  <name>.captioned.mp4  or  <name>.srt
+  logs\render.log
+workspace\cache\remotion-bundles\<hash>\   the render bundle, rebuilt when the composition changes
+```
+
+The selected video, imported videos, the style and the grouping are kept in
+`project.json` under `settings.captions` (not part of the plan fingerprint, so
+changing them never makes a plan out of date).
+
+### Speed on this machine (i5-1335U, CPU, int8)
+
+An 8.2-second Hebrew phone take: 37 s for the first transcription (about
+10 s of it loading the model), 17 s when the loaded model is reused. The
+Whisper process stays loaded for 10 minutes after a job
+(`VIDEO_FACTORY_WHISPER_IDLE_SECONDS`) and is stopped with the backend.
+Rendering a 4-second 360×640 test clip took 13 s including browser start-up,
+once the bundle was built; the first render after the composition changes
+builds the bundle first (tens of seconds). The 8.2-second take was rendered
+too, but its time was not recorded.
+
+### Known limitations (captions)
+
+- **No remapping across edits.** Captions belong to the exact video they were
+  transcribed from. Re-cutting makes a new video that must be transcribed
+  again; old captions are not shifted onto it.
+- **Progress is approximate.** Whisper reports the end of each recognised
+  phrase, so the bar moves in steps (one step for a short take).
+- **No word-level editing.** Word timing can be kept or dropped, not adjusted
+  word by word; there is no waveform or timeline.
+- **One template.** A single caption design with the controls above.
+- **GPU transcription is untested here** (no NVIDIA GPU on this machine). The
+  option is offered only when CTranslate2 reports a CUDA device.
+- **Large inputs.** 4K and long videos work but render slowly on a laptop CPU;
+  there is no proxy rendering.
+- **The older per-run subtitles** (below) still work and are separate: they
+  write an SRT straight from Whisper with no editing.
+
+## Subtitles with Whisper (per cutting run, older)
 
 The in-app replacement for `legacy/Whisper/transcribe_video.bat`, and the step
 after cutting. Every cut run now trims the clips **and merges them into one
@@ -611,8 +853,20 @@ are not available through an AI editing plan yet.
 cd C:\Users\orinesher\Documents\videoFactory
 .\.venv\Scripts\python.exe -m pytest backend\tests -q
 cd .\frontend
+npm.cmd test
 npm.cmd run build
 ```
+
+`backend\tests\test_captions.py` covers stage 2A: grouping, validation, word
+timing on edits, split/merge, SRT, frame-rate choice, transcript and revision
+persistence, reuse and retranscription, regrouping, stale detection, style
+isolation, immutable export snapshots, cancelled and unverifiable renders, the
+Whisper service's model reuse and cancellation (with a fake worker), a plan
+running `captions.transcribe` — and two **real Remotion renders** of a
+generated clip (captions visible only while on screen, audio onset and level
+unchanged, duration within tolerance; and cancelling a real render). Those two
+skip when the renderer is not prepared. `npm.cmd test` runs the seconds-to-frames
+tests in `frontend\tests\timing.test.ts`. No test loads a Whisper model.
 
 The Python tests use a throwaway workspace and a stubbed provider: they never
 touch `workspace\`, your footage, or the network.
@@ -646,7 +900,11 @@ tools are not on `PATH`, those tests skip rather than fail.
 | Cut map | `…\cuts\<run-id>\cut-map.json` |
 | Cut previews | `…\intermediates\cut-samples\<sample-id>\` (`sample.json`, `edited.mp4`, `source.mp4`) |
 | Boundary analysis cache | `…\intermediates\cut-analysis\<key>.json` |
-| Subtitles | `…\cuts\<run-id>\subtitles\<clip-id>.srt` |
+| Subtitles (older, per run) | `…\cuts\<run-id>\subtitles\<clip-id>.srt` |
+| Transcripts and caption revisions | `workspace\projects\<project-id>\captions\transcripts\<transcript-id>\` |
+| Caption exports (MP4, SRT) | `workspace\projects\<project-id>\exports\captions\<export-id>\` |
+| Remotion render bundle | `workspace\cache\remotion-bundles\` |
+| Whisper models | `%USERPROFILE%\.cache\huggingface\hub` |
 | Exports | `workspace\projects\<project-id>\exports\` |
 | Source footage | **stays where you recorded it** |
 
@@ -815,3 +1073,47 @@ mechanism on test tones; only you can tell whether a cut *sounds* right.
   before trusting it.
 - **Sync.** Watch the lips on the first and last word of the rendered clip and
   across the join in the merged video.
+
+### Captions (stage 2A)
+
+**Walkthrough with one real Hebrew talking-head clip** (a minute or less is
+plenty):
+
+29. Open a video whose footage includes the clip (or **Import a video…** in
+    **Captions** to add a finished one). In **Captions → 1. Video**, choose it.
+    Check the size, fps and duration line, and read any variable-frame-rate note.
+30. **2. Transcription:** leave *ivrit.ai large-v3 turbo*, *Hebrew*, *CPU*,
+    *int8*. Press **Transcribe**. The job shows "Loading the Whisper model…",
+    then "Transcribing — reached m:ss of m:ss". Press **Cancel** once on a
+    second attempt to see it stop and leave no transcript.
+31. When it finishes, the captions appear on the right and the player on the
+    left. Press **Transcribe** again: it says the existing transcript was
+    reused, instantly.
+32. **3. Review:** press ▶ on a caption — the player jumps there and the row
+    is highlighted while it plays. Fix a misheard word (the row keeps no
+    badge), then add a word to another caption (it shows **Group timing**
+    with the reason). Type a caption with English, numbers and punctuation,
+    e.g. `יותר ספורט (sport) בחיים: 3 פעמים בשבוע!`, and check the order in the
+    preview. Split one caption with **Split…**, merge two with **Merge ↓**,
+    drag an end past the next start to see the overlap error and **Fix
+    overlaps**. **Save captions** → "Saved as revision 2".
+33. Open **Revision 1** from the list: your edits are not in it, and it is
+    read-only. Go back to the latest.
+34. **4. Grouping and style:** change *Maximum words* to 3 and press
+    **Regroup from the transcript** — it warns that revision 2 has manual
+    corrections. Cancel, or accept and check revision 2 is still listed.
+    Change the font, size, box/outline and vertical position; the preview
+    updates while paused and while playing. **Save style**.
+35. **5. Export:** **Export MP4 with captions**, then immediately edit a
+    caption — the export still renders the revision it was started with.
+    When it finishes, **Play** it: check that captions appear on the same
+    words as in the preview, the lip sync, that the sound is not doubled, and
+    a long caption wraps inside the frame. **Export SRT** and open it in
+    Notepad or Premiere.
+36. Restart both terminals, reopen the video: the selected input, transcripts,
+    revisions, style and exports are all still there.
+
+**Visual checklist:** Hebrew letters in the bundled font (not a system
+fallback), punctuation at the left end of a Hebrew line, parentheses facing
+the right way around English words, numbers left-to-right inside the line, no
+caption touching the frame edge, portrait and landscape videos looking alike.

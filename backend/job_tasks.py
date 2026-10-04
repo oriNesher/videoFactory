@@ -28,6 +28,9 @@ denominator to divide by.
 from typing import Any
 
 from . import (
+    caption_inputs,
+    caption_jobs,
+    captions,
     capabilities,
     cut_advice,
     cut_runner,
@@ -311,10 +314,38 @@ def _execute_cut_action(context: jobs.JobContext, action: dict) -> dict:
     return cut_runner.run_cutting(context, job_input)
 
 
+def _execute_transcribe_action(context: jobs.JobContext, action: dict) -> dict:
+    """Transcribe one footage file through the same path as the Captions button.
+
+    An existing transcript of the same video with the same settings is reused
+    rather than made again, exactly as the button does without "again".
+    """
+    settings = dict(captions.default_transcription_settings())
+    settings.update(action["parameters"])
+    request = {"input_key": "source.%s" % action["resource_ids"][0], "settings": settings}
+    try:
+        validated = captions.validate_transcription_settings(settings)
+        described = caption_inputs.resolve_for_job(context.project_id, request["input_key"])
+        existing = captions.find_reusable(
+            context.project_id, captions.reuse_key(described["fingerprint"]["digest"], validated)
+        )
+        if existing is not None:
+            return {
+                "transcript_id": existing["id"],
+                "reused": True,
+                "summary": "An existing transcript of this video with the same settings was reused.",
+            }
+        job_input = caption_jobs.build_transcription_input(context.project_id, request)
+    except storage.ProjectError as error:
+        raise jobs.JobFailed(error.message) from error
+    return caption_jobs.run_transcription(context, job_input)
+
+
 EXECUTORS = {
     capabilities.TOOL_CHECK: _execute_tool_check_action,
     capabilities.CUT_SILENCE: _execute_cut_action,
     capabilities.TRIM_BOUNDARIES: _execute_cut_action,
+    capabilities.TRANSCRIBE: _execute_transcribe_action,
 }
 
 

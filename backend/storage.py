@@ -131,6 +131,45 @@ def write_json_atomic(path: Path, data: Any) -> None:
         raise
 
 
+def write_json_exclusive(path: Path, data: Any) -> None:
+    """Create a JSON file that must not exist yet, atomically.
+
+    For immutable records (plan revisions, caption revisions, transcripts):
+    *exclusive*, so a new record can never replace an earlier one
+    (`FileExistsError`), and *atomic*, so a reader never sees half a file. The
+    content goes to a temp file which is then hard-linked into place;
+    `os.link` fails if the target exists, which gives both at once.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    temporary = path.parent / (".%s.tmp" % uuid.uuid4().hex[:12])
+
+    try:
+        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        for attempt in range(WRITE_ATTEMPTS):
+            try:
+                os.link(temporary, path)
+                break
+            except FileExistsError:
+                raise
+            except OSError:
+                # Either a transient Windows sharing violation, or a filesystem
+                # without hard links. Retry, then fall back to a checked
+                # replace, which still keeps atomicity for readers.
+                if attempt < WRITE_ATTEMPTS - 1:
+                    time.sleep(WRITE_RETRY_SECONDS)
+                    continue
+                if path.exists():
+                    raise FileExistsError(path) from None
+                replace_with_retry(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def read_text_resilient(path: Path) -> str:
     for attempt in range(READ_ATTEMPTS):
         try:

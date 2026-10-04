@@ -7,6 +7,7 @@ import {
   openSourceInVlc,
   saveProject,
 } from './api'
+import CaptionsPanel from './CaptionsPanel'
 import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
 import PlanPanel from './PlanPanel'
@@ -452,6 +453,12 @@ export default function ProjectsScreen() {
               key={`cutting-${project.id}`}
               project={project}
               refreshToken={plansRefresh}
+              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+            />
+
+            <CaptionsPanel
+              key={`captions-${project.id}`}
+              project={project}
               onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
             />
 

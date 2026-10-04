@@ -1,5 +1,14 @@
 import type {
   AddDirectoryResult,
+  CaptionCatalog,
+  CaptionCheck,
+  CaptionGrouping,
+  CaptionInputState,
+  CaptionInputsResponse,
+  CaptionRevision,
+  EditableCaption,
+  TranscriptionSettings,
+  TranscriptSummary,
   CapabilityCatalog,
   CutRun,
   CutRunListing,
@@ -19,6 +28,7 @@ import type {
   ToolStatus,
   ToolVersion,
 } from './types'
+import type { CaptionStyle } from './captions/types'
 
 /** Every call goes through the Vite dev proxy to the local Python service. */
 const API_BASE = '/api'
@@ -399,4 +409,148 @@ export function subtitleUrl(
   kind: 'vtt' | 'srt',
 ) {
   return `/api/projects/${projectId}/subtitles/runs/${runId}/outputs/${outputId}/${kind}`
+}
+
+// --- captions (stage 2A) -----------------------------------------------------
+
+const captionsBase = (projectId: string) => `/projects/${projectId}/captions`
+
+export function getCaptionCatalog(projectId: string) {
+  return request<CaptionCatalog>(`${captionsBase(projectId)}/catalog`)
+}
+
+export function listCaptionInputs(projectId: string) {
+  return request<CaptionInputsResponse>(`${captionsBase(projectId)}/inputs`)
+}
+
+/** Without a path the backend opens the machine's own file dialog. */
+export function importCaptionVideo(projectId: string, path?: string) {
+  return request<{ cancelled: boolean; input_key: string | null; duplicate?: boolean }>(
+    `${captionsBase(projectId)}/imports`,
+    { method: 'POST', body: JSON.stringify({ path: path ?? null }) },
+  )
+}
+
+export function selectCaptionInput(projectId: string, inputKey: string | null) {
+  return request<{ selected: string | null }>(`${captionsBase(projectId)}/selection`, {
+    method: 'PUT',
+    body: JSON.stringify({ input_key: inputKey }),
+  })
+}
+
+export function getCaptionInput(projectId: string, inputKey: string) {
+  return request<CaptionInputState>(`${captionsBase(projectId)}/inputs/${inputKey}`)
+}
+
+/** The selected video for the preview player. A key, never a path. */
+export function captionInputStreamUrl(projectId: string, inputKey: string) {
+  return `${API_BASE}${captionsBase(projectId)}/inputs/${inputKey}/stream`
+}
+
+/** Returns either a reused transcript or the queued job. */
+export function startTranscription(
+  projectId: string,
+  inputKey: string,
+  settings: TranscriptionSettings,
+  force: boolean,
+) {
+  return request<{ reused: TranscriptSummary | null; job: Job | null }>(
+    `${captionsBase(projectId)}/transcriptions`,
+    { method: 'POST', body: JSON.stringify({ input_key: inputKey, settings, force }) },
+  )
+}
+
+export function downloadWhisperModel(projectId: string, model: string) {
+  return request<Job>(`${captionsBase(projectId)}/model-downloads`, {
+    method: 'POST',
+    body: JSON.stringify({ model }),
+  })
+}
+
+export function prepareCaptionRenderer(projectId: string) {
+  return request<Job>(`${captionsBase(projectId)}/renderer-setup`, { method: 'POST' })
+}
+
+export function getCaptionRevision(projectId: string, transcriptId: string, revision: number) {
+  return request<CaptionRevision>(
+    `${captionsBase(projectId)}/transcripts/${transcriptId}/revisions/${revision}`,
+  )
+}
+
+export function validateCaptions(projectId: string, transcriptId: string, captions: EditableCaption[]) {
+  return request<CaptionCheck>(`${captionsBase(projectId)}/transcripts/${transcriptId}/validate`, {
+    method: 'POST',
+    body: JSON.stringify({ captions }),
+  })
+}
+
+export function captionOperation(
+  projectId: string,
+  transcriptId: string,
+  captions: EditableCaption[],
+  operation: 'split' | 'merge' | 'fix_overlaps',
+  options: { captionId?: string; wordIndex?: number; atSeconds?: number } = {},
+) {
+  return request<CaptionCheck>(`${captionsBase(projectId)}/transcripts/${transcriptId}/operations`, {
+    method: 'POST',
+    body: JSON.stringify({
+      captions,
+      operation,
+      caption_id: options.captionId ?? null,
+      word_index: options.wordIndex ?? null,
+      at_seconds: options.atSeconds ?? null,
+    }),
+  })
+}
+
+export function saveCaptionRevision(
+  projectId: string,
+  transcriptId: string,
+  baseRevision: number,
+  captions: EditableCaption[],
+) {
+  return request<CaptionRevision>(`${captionsBase(projectId)}/transcripts/${transcriptId}/revisions`, {
+    method: 'POST',
+    body: JSON.stringify({ base_revision: baseRevision, captions }),
+  })
+}
+
+export function regroupCaptions(
+  projectId: string,
+  transcriptId: string,
+  baseRevision: number | null,
+  grouping: CaptionGrouping,
+  confirmDiscardEdits: boolean,
+) {
+  return request<CaptionRevision>(`${captionsBase(projectId)}/transcripts/${transcriptId}/regroup`, {
+    method: 'POST',
+    body: JSON.stringify({
+      base_revision: baseRevision,
+      grouping,
+      confirm_discard_edits: confirmDiscardEdits,
+    }),
+  })
+}
+
+export function saveCaptionStyle(projectId: string, style: CaptionStyle) {
+  return request<{ style: CaptionStyle; style_revision: number }>(`${captionsBase(projectId)}/style`, {
+    method: 'PUT',
+    body: JSON.stringify({ style }),
+  })
+}
+
+export function startCaptionExport(
+  projectId: string,
+  transcriptId: string,
+  revision: number,
+  format: 'mp4' | 'srt',
+) {
+  return request<Job>(`${captionsBase(projectId)}/exports`, {
+    method: 'POST',
+    body: JSON.stringify({ transcript_id: transcriptId, revision, format }),
+  })
+}
+
+export function captionExportUrl(projectId: string, exportId: string, download: boolean) {
+  return `${API_BASE}${captionsBase(projectId)}/exports/${exportId}/file${download ? '?download=true' : ''}`
 }

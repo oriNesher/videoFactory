@@ -62,11 +62,43 @@ def _ask_for_directory() -> str | None:
     return chosen or None
 
 
+def _ask_for_video_file() -> str | None:
+    """Open the native file dialog for one video. Same threading rules as above."""
+    import tkinter
+    from tkinter import filedialog
+
+    patterns = " ".join("*%s" % extension for extension in sorted(storage.VIDEO_EXTENSIONS))
+    root = tkinter.Tk()
+    try:
+        root.withdraw()
+        root.attributes("-topmost", True)
+        chosen = filedialog.askopenfilename(
+            title=FILE_DIALOG_TITLE,
+            filetypes=[("Video files", patterns), ("All files", "*.*")],
+        )
+    finally:
+        root.destroy()
+
+    return chosen or None
+
+
+FILE_DIALOG_TITLE = "Choose a video to caption"
+
+
 def choose_directory() -> dict:
     """Show the folder dialog and report what the user picked."""
+    return _show_dialog(_ask_for_directory, "folder")
+
+
+def choose_video_file() -> dict:
+    """Show the file dialog for one video and report what the user picked."""
+    return _show_dialog(_ask_for_video_file, "file")
+
+
+def _show_dialog(ask, noun: str) -> dict:
     if not _dialog_lock.acquire(blocking=False):
         raise FolderError(
-            "A folder dialog is already open. Finish or cancel it first.",
+            "A file or folder dialog is already open. Finish or cancel it first.",
             status_code=409,
         )
 
@@ -74,7 +106,7 @@ def choose_directory() -> dict:
 
     def run() -> None:
         try:
-            result["path"] = _ask_for_directory()
+            result["path"] = ask()
         except Exception as error:  # noqa: BLE001 - reported, never raised here
             result["error"] = error
 
@@ -90,13 +122,13 @@ def choose_directory() -> dict:
     error = result.get("error")
     if isinstance(error, ImportError):
         raise DialogUnavailable(
-            "The folder dialog is not available on this machine (Tk is missing). "
-            "Paste the folder path instead."
+            "The %s dialog is not available on this machine (Tk is missing). "
+            "Paste the %s path instead." % (noun, noun)
         ) from error
     if error is not None:
         raise DialogUnavailable(
-            "The folder dialog could not be opened: %s. Paste the folder path "
-            "instead." % error
+            "The %s dialog could not be opened: %s. Paste the %s path "
+            "instead." % (noun, error, noun)
         ) from error
 
     path = result.get("path")

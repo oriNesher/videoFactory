@@ -979,3 +979,208 @@ cd C:\Users\orinesher\Documents\videoFactory
 cd .\frontend
 npm.cmd run build
 ```
+
+## Stage 2A — transcription, editable captions, Remotion preview and export
+
+Status: complete. Next: **Stage 2B — zoom planning and rendering**, as a layer
+in the same composition.
+
+### What I found first
+
+- A subtitles module already existed (`subtitles.py`, `subtitle_runner.py`,
+  `whisper_worker.py`): one SRT per cut-run output straight from Whisper, no
+  editing, no revisions, no staleness, a model fixed in code and a fresh
+  Whisper process per job. It is left working and documented as the older
+  path; its one-shot worker mode is unchanged.
+- The legacy `transcribe.py`'s recipe (beam 5, VAD filter, conditioning on
+  previous text, word timestamps) and its grouping rules were the useful
+  parts and are reused, with changes listed below.
+- On this machine: faster-whisper 1.2.1 / CTranslate2 4.8.2, the ivrit.ai
+  turbo and Systran medium models already cached, no NVIDIA GPU
+  (i5-1335U, 16 GB), Node 22.14. Remotion was not installed; 4.0.532 was the
+  current release and supports React 19.
+
+### What was built
+
+**Backend:**
+
+| File | Role |
+| --- | --- |
+| `caption_inputs.py` | New. Input keys (`cut.<run>.<output>`, `source.<id>`, `import.<id>`), captions-only imports, resolving to files, FFprobe metadata (display size after rotation, frame-rate decision), fingerprints, composition size |
+| `captions.py` | New. Transcription settings and model catalog, grouping, validation/normalisation, split/merge/fix-overlaps, transcript and revision storage, regrouping, staleness, style spec, SRT, composition props |
+| `whisper_service.py` | New. One long-lived Whisper process keyed by model/device/precision/threads; reuse, idle shutdown, cancellation by tree kill |
+| `caption_jobs.py` | New. Jobs: `caption_transcription`, `caption_model_download`, `caption_renderer_setup`, `caption_export`; renderer readiness; export records, verification, listing |
+| `api_captions.py` | New. The router below |
+| `whisper_worker.py` | Adds `--serve` (persistent, `local_files_only`) and `--download`; the one-shot mode is unchanged |
+| `folders.py` | The native dialog runner is shared; adds a video-file picker |
+| `storage.py` | `write_json_exclusive` (moved from `plans.py`, which now calls it) |
+| `capabilities.py` | `captions.transcribe` registered, `CATALOG_VERSION` → 4 |
+| `job_tasks.py` | Executor for `captions.transcribe` (same path as the button, with reuse) |
+| `resources.py` | `settings.captions` excluded from the plan fingerprint |
+| `main.py`, `models.py` | Router, request bodies, Whisper service stopped at shutdown |
+| `tests/test_captions.py` | New. 60 tests |
+
+**Frontend:** `src/captions/` (the composition: `CaptionedVideo.tsx`,
+`timing.ts`, `fonts.ts`, `types.ts`), `src/remotion/` (render entry),
+`scripts/render-captions.mjs` (Node render/setup entry), `CaptionsPanel.tsx`,
+`CaptionEditor.tsx`, `CaptionStyleForm.tsx`, `CaptionPreview.tsx`,
+`captionFormat.ts`, `tests/timing.test.ts` (`npm.cmd test`). New
+dependencies: `remotion`, `@remotion/player`, `@remotion/media`,
+`@remotion/bundler`, `@remotion/renderer` (4.0.532, exact) and three
+`@fontsource-variable` fonts (OFL). `vite.config.ts` reads an optional
+`VIDEO_FACTORY_API_PORT` (default 8000).
+
+Endpoints, all under `/projects/{id}/captions`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/catalog` | Models (and whether downloaded), languages, devices, grouping and style specs, renderer readiness |
+| `GET` | `/inputs` | Selectable videos, the selected one, saved style and grouping |
+| `POST` | `/imports` | Import a video for captioning (file dialog when no path) |
+| `PUT` | `/selection` | Remember the selected video |
+| `GET` | `/inputs/{key}` | Metadata, fingerprint, composition, transcripts (with stale flags), exports, caption jobs |
+| `GET` | `/inputs/{key}/stream` | The video for the preview, with Range |
+| `POST` | `/transcriptions` | Reuse a matching transcript, or queue Whisper (`force` for a new one) |
+| `POST` | `/model-downloads` | Queue a model download |
+| `POST` | `/renderer-setup` | Queue the headless browser download and bundle build |
+| `GET` | `/transcripts/{id}` | Transcript summary and text |
+| `GET` | `/transcripts/{id}/revisions/{n}` | One caption revision |
+| `POST` | `/transcripts/{id}/validate` | Check a draft; writes nothing |
+| `POST` | `/transcripts/{id}/operations` | Split / merge / fix overlaps on a draft; writes nothing |
+| `POST` | `/transcripts/{id}/revisions` | Save a draft as a new revision |
+| `POST` | `/transcripts/{id}/regroup` | New revision from the transcript with new grouping |
+| `GET`/`PUT` | `/style` | The caption style |
+| `POST` | `/exports` | Queue an MP4 or SRT export of a revision |
+| `GET` | `/exports` | Export history |
+| `GET` | `/exports/{id}/file` | Play or download (`?download=true`) |
+
+### Decisions
+
+**Transcripts are tied to bytes, not names.** Every transcript records the
+input key and the `media.fingerprint` digest; reuse needs the same digest and
+every setting that changes Whisper's output (model, language, device,
+precision, beam, VAD, recipe version). A different digest under the same key
+makes the transcript stale: listed, read-only, not drawn on the new video,
+not exportable. Nothing is ever deleted.
+
+**Three layers, never mixed.** Raw transcript (immutable) → caption revisions
+(immutable, numbered, each with its parent) → style (project-level). The tests
+assert that a style save writes no transcript and no revision and calls no
+Whisper.
+
+**Grouping** keeps the legacy rules (word limit, character limit before
+overflow, pause, punctuation after N words, segment boundaries) and changes:
+a lone word left by a *length* split is rebalanced (5+1 → 3+3; pause and
+punctuation splits are never moved); a word longer than the line gets its own
+caption and wraps on screen; a caption shorter than the minimum is held into
+the following gap but never into the next caption or past the end, without
+changing word times; the Hebrew sof pasuq counts as punctuation.
+
+**Word timing is kept or dropped, never invented.** Same word count → timing
+kept with corrected spellings. Different count, unreadable timing, or times
+that no longer contain the words → group-level timing with the reason on the
+caption. Splitting uses real word boundaries when there are any; otherwise the
+player position or a marked estimate.
+
+**Overlaps are refused, not resolved silently.** Saving rejects an overlap with
+the caption numbers and times; "Fix overlaps" is an explicit button that trims
+ends and never moves starts.
+
+**Edits go through one implementation.** The editor's split, merge and
+fix-overlaps call the backend on the unsaved draft, and live validation uses
+the save's own validator, so the preview, the save and the export all agree
+with the Python tests.
+
+**Model handling.** Serve mode loads with `local_files_only=True`; a missing
+model is a specific error naming **Download model**, never a silent download.
+One worker process stays loaded (10 min idle, configurable) — measured on an
+8.2 s take: 37 s first run (10.2 s of it loading), 17 s reusing the model.
+Cancellation kills the worker, so the next job reloads. GPU is offered only if
+`ctranslate2.get_cuda_device_count()` > 0, with a message naming the driver,
+CUDA 12 and cuDNN 9 otherwise.
+
+**Progress is honest.** Loading has no percentage. Transcription's percentage
+is the end of the last recognised segment over the duration, labelled as
+stepping; a short take moves in one step. Rendering's percentage is
+Remotion's own rendered/encoded frame ratio.
+
+**Remotion integration.**
+- One composition (`CaptionedVideo`) for the Player and the render; the
+  backend writes the same props shape from the saved data.
+- Video via `@remotion/media`'s `<Video>` (Remotion's recommended component;
+  it falls back to `<OffthreadVideo>` by itself). Its own audio is the only
+  audio.
+- Dimensions, fps and frame count come from the snapshot through
+  `calculateMetadata`, and the render script refuses a composition that
+  resolves to anything else.
+- The render script serves exactly one file on 127.0.0.1 with a random port
+  and token (with Range and CORS for the headless page); no workspace or
+  filesystem path is exposed by the API.
+- The bundle is cached by a hash of the composition sources and the
+  lockfile.
+- A render never downloads the browser (`onBrowserDownload` throws);
+  **Prepare renderer** is the explicit step.
+- Output goes to `.partial.mp4`, is verified with FFprobe, then renamed.
+
+**Frame rate** — see the README: exact for constant-rate sources, the
+nominal standard rate for variable-rate phone clips, otherwise the average
+snapped to a standard rate. Frames come from absolute seconds
+(`ceil(t·fps − 1e-6)`), never accumulated.
+
+**RTL** — direction from the transcript language, not the first character;
+bidi left to the browser; no string reversal; RLM-wrapped SRT lines.
+
+**Plans.** `captions.transcribe` is registered because it runs end to end
+(footage only — plan resources are footage ids). Caption export is not a plan
+capability: it needs a reviewed revision. No LLM is involved anywhere in
+captioning.
+
+### Checks performed
+
+Automated:
+
+- `.venv\Scripts\python.exe -m pytest backend\tests -q` → **349 passed**;
+  `test_captions.py` has 60 tests, including two real Remotion
+  renders. One existing test was updated, not weakened: the capability-catalog
+  invariant test lists the fourth capability.
+- `npm.cmd test` → 6 passed (seconds-to-frames, boundaries, no drift over an
+  hour at 29.97, sub-frame captions, duration rounding).
+- `npm.cmd run build` → succeeded. Vite warns that the bundle is over 500 kB
+  (Remotion and its decoder); harmless for a local app.
+- `npm.cmd run lint` → the same five pre-existing `set-state-in-effect`
+  warnings; none from the new files.
+
+Real media, on this machine:
+
+- Remotion render of a generated 360×640 clip with Hebrew/English/number/₪/
+  parenthesis captions and a long caption: frames 15, 50 and 87 show the
+  right captions in the right bidi order, the long one wraps inside the safe
+  area. Tone onset 1.0217 s in source and export, mean level −30.2 dB in
+  both: audio once, in sync. Duration 4.011 s for 100 frames at 25 fps.
+- Whisper smoke test on one 8.2 s Hebrew phone take (read only): correct
+  Hebrew text, 18 words, 4 captions; model reuse measured as above.
+- End to end in headless Chrome against a throwaway backend and workspace
+  (the user's servers and `workspace\` untouched): select the take →
+  transcribe (real Whisper, 37 s) → repeat request reused → seek, active-row
+  highlight → correct a word, add a word (group timing shown), type a long
+  mixed-language caption, split, merge, save (revision 2) → box style, Rubik →
+  export MP4 and SRT. The export (474×850, 8.213 s vs 8.213 s source, H.264 +
+  AAC, one stream each) was compared frame by frame with the preview
+  screenshots: same text, wrapping, style and timing. The SRT carried every
+  edit. No console errors. A first export attempt was refused up front by the
+  Windows path-length guard because the throwaway workspace was nested deep in
+  a temp folder — the guard working, not a bug — and succeeded from a short
+  path.
+
+**Not verified here:** GPU transcription (no NVIDIA GPU); a model download
+from Hugging Face (both offered-by-default models were already cached, and
+downloading several gigabytes for a test was out of scope); transcription
+accuracy beyond one short take; long (minutes) or 4K inputs; a rotated-flag
+phone source (the code reads both rotation metadata forms, untested on a real
+file); playback in browsers other than Chrome.
+
+### Known limitations
+
+See the README's captions section. In short: no remapping of captions across
+re-cuts; stepwise transcription progress; no word-level timing editor or
+waveform; one template; GPU untested; slow 4K renders on a laptop CPU.

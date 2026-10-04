@@ -801,3 +801,159 @@ bdi {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- captions (stage 2A) ---------------------------------------------------- */
+
+.captions h4 {
+  margin: 20px 0 6px;
+}
+
+.caption-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+
+.caption-settings .field {
+  margin: 4px 0;
+  min-width: 160px;
+}
+
+.caption-workspace {
+  display: grid;
+  grid-template-columns: minmax(240px, 2fr) minmax(320px, 3fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .caption-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+.caption-preview-column {
+  position: sticky;
+  top: 8px;
+}
+
+.caption-preview {
+  width: 100%;
+  margin: 0 auto;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.caption-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.caption-row {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.caption-row.active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.caption-row.invalid {
+  border-color: var(--bad-border);
+}
+
+.caption-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.caption-row .seek {
+  min-width: 52px;
+}
+
+.caption-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.caption-time input {
+  width: 76px;
+  font-family: var(--mono);
+}
+
+.caption-time button {
+  padding: 2px 6px;
+}
+
+.caption-text {
+  flex: 1 1 220px;
+  min-width: 160px;
+  font-size: 16px;
+}
+
+input.invalid {
+  border-color: var(--bad);
+  outline-color: var(--bad);
+}
+
+.caption-error {
+  color: var(--bad);
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.split-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.caption-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 4px 16px;
+}
+
+.caption-style-grid .field {
+  margin: 6px 0;
+}
+
+.captions details {
+  margin: 8px 0;
+}
+
+.captions summary {
+  cursor: pointer;
+  color: var(--text-h);
+}
+
+.caption-exports,
+.captions .jobs {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.caption-exports li,
+.caption-job {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}

@@ -753,3 +753,209 @@ export type GeneratedResource = {
   size_bytes: number | null
   created_at: string
 }
+
+// --- captions (stage 2A) -----------------------------------------------------
+
+export type CaptionInputListing = {
+  key: string
+  kind: 'cut' | 'source' | 'import'
+  kind_label: string
+  label: string
+  filename: string
+  available: boolean
+  created_at: string | null
+}
+
+export type CaptionGrouping = {
+  max_words: number
+  max_characters: number
+  min_words_before_punctuation: number
+  pause_seconds: number
+  min_duration_seconds: number
+}
+
+export type CaptionInputsResponse = {
+  inputs: CaptionInputListing[]
+  selected: string | null
+  style: import('./captions/types').CaptionStyle
+  style_revision: number
+  grouping: CaptionGrouping
+}
+
+export type CaptionComposition = {
+  width: number
+  height: number
+  fps: number
+  duration_in_frames: number
+  notes: string[]
+}
+
+export type CaptionInputMetadata = {
+  duration_seconds: number
+  display_width: number
+  display_height: number
+  rotation: number
+  fps: number
+  fps_method: string
+  variable_frame_rate: boolean
+  avg_frame_rate: string | null
+  has_audio: boolean
+}
+
+export type CaptionInputDetail = {
+  key: string
+  kind: string
+  kind_label: string
+  label: string
+  filename: string
+  available: boolean
+  metadata: CaptionInputMetadata | null
+  composition: CaptionComposition | null
+  fingerprint: { method: string; digest: string; size_bytes: number } | null
+  error: string | null
+}
+
+export type TranscriptionSettings = {
+  model: string
+  language: string
+  device: 'cpu' | 'cuda'
+  compute_type: string
+  beam_size: number
+  vad_filter: boolean
+}
+
+export type TranscriptSummary = {
+  id: string
+  created_at: string
+  input_key: string
+  input_label: string
+  fingerprint: string
+  settings: TranscriptionSettings & { cpu_threads?: number }
+  model_label: string
+  language: string
+  language_probability: number | null
+  word_count: number | null
+  segment_count: number
+  retranscription: boolean
+  revisions: number[]
+  latest_revision: number | null
+  latest_has_manual_edits: boolean
+  stale: boolean
+  reason: string | null
+}
+
+export type EditableCaption = {
+  id: string
+  start: number
+  end: number
+  text: string
+  words: { text: string; start: number; end: number }[] | null
+  word_timing?: 'word' | 'group'
+  timing_note?: string | null
+}
+
+export type CaptionRevision = {
+  transcript_id: string
+  revision: number
+  parent_revision: number | null
+  origin: 'grouping' | 'edit' | 'regroup'
+  has_manual_edits: boolean
+  created_at: string
+  language: string
+  grouping: CaptionGrouping
+  captions: EditableCaption[]
+  input: { key: string; fingerprint: { digest: string }; duration_seconds: number }
+}
+
+export type CaptionValidationError = {
+  index: number | null
+  caption_id: string | null
+  field: string
+  message: string
+}
+
+export type CaptionCheck = {
+  captions: EditableCaption[]
+  errors: CaptionValidationError[]
+  valid: boolean
+}
+
+export type CaptionJobSummary = {
+  id: string
+  type: string
+  type_label: string
+  status: JobStatus
+  progress_message: string
+  progress_percent: number | null
+  cancel_requested: boolean
+  created_at: string
+  finished_at: string | null
+  error: string | null
+  result: Record<string, unknown> | null
+  format: string | null
+}
+
+export type CaptionExport = {
+  export_id: string
+  job_id: string
+  format: 'mp4' | 'srt'
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+  created_at: string
+  finished_at: string | null
+  input_key: string
+  input_label: string
+  transcript_id: string
+  revision: number
+  style_revision: number
+  caption_count: number
+  composition: CaptionComposition
+  output: { filename: string; size_bytes: number; media_type: string } | null
+  verification: Record<string, unknown> | null
+  error: string | null
+  downloadable: boolean
+  stale?: boolean
+}
+
+export type CaptionInputState = {
+  input: CaptionInputDetail
+  transcripts: TranscriptSummary[]
+  exports: CaptionExport[]
+  active_jobs: CaptionJobSummary[]
+  recent_jobs: Record<string, CaptionJobSummary>
+}
+
+export type CaptionSpec = {
+  name: string
+  type: 'integer' | 'number' | 'choice' | 'colour' | 'boolean'
+  label: string
+  description?: string
+  unit?: string
+  min?: number
+  max?: number
+  step?: number
+  choices?: string[]
+  default: unknown
+}
+
+export type CaptionCatalog = {
+  models: { id: string; label: string; download: string; downloaded: boolean; default: boolean }[]
+  model_cache: string
+  languages: { code: string; label: string }[]
+  devices: { id: 'cpu' | 'cuda'; label: string; available: boolean; reason: string | null }[]
+  compute_types: Record<string, string[]>
+  cpu_threads: number
+  transcription_defaults: TranscriptionSettings
+  grouping: CaptionSpec[]
+  grouping_defaults: CaptionGrouping
+  style: CaptionSpec[]
+  style_defaults: import('./captions/types').CaptionStyle
+  fonts: { id: string; label: string; license: string }[]
+  renderer: {
+    ready: boolean
+    node: string | null
+    packages_installed: boolean
+    browser_downloaded: boolean
+    problems: string[]
+  }
+  whisper: { loaded: boolean; model: string | null }
+}
