@@ -341,11 +341,27 @@ def _execute_transcribe_action(context: jobs.JobContext, action: dict) -> dict:
     return caption_jobs.run_transcription(context, job_input)
 
 
+def _execute_zoom_action(context: jobs.JobContext, action: dict) -> dict:
+    """Zoom one footage file through the same code as the Zooms section."""
+    from . import zoom_jobs
+
+    request = {
+        "input_key": "source.%s" % action["resource_ids"][0],
+        "preference": action["parameters"].get("preference"),
+    }
+    try:
+        job_input = zoom_jobs.build_input(context.project_id, request)
+    except storage.ProjectError as error:
+        raise jobs.JobFailed(error.message) from error
+    return zoom_jobs.run_zooms(context, job_input)
+
+
 EXECUTORS = {
     capabilities.TOOL_CHECK: _execute_tool_check_action,
     capabilities.CUT_SILENCE: _execute_cut_action,
     capabilities.TRIM_BOUNDARIES: _execute_cut_action,
     capabilities.TRANSCRIBE: _execute_transcribe_action,
+    capabilities.ZOOMS: _execute_zoom_action,
 }
 
 

@@ -37,17 +37,22 @@ SETTINGS_KEY = "captions"
 KIND_CUT = "cut"
 KIND_SOURCE = "source"
 KIND_IMPORT = "import"
+# A verified zoom output (stage 2B). Its timing is its clean parent's, so it
+# has no transcripts of its own: see `timing_identity`.
+KIND_ZOOM = "zoom"
 
 KIND_LABELS = {
     KIND_CUT: "Cutting output",
     KIND_SOURCE: "Project footage",
     KIND_IMPORT: "Imported for captions",
+    KIND_ZOOM: "Zoomed video",
 }
 
 _KEY_PATTERN = re.compile(
     r"^(?:cut\.[0-9a-f]{12,32}\.(?:combined|clip-[0-9]{4})"
     r"|source\.[0-9a-f]{32}"
-    r"|import\.[0-9a-f]{32})$"
+    r"|import\.[0-9a-f]{32}"
+    r"|zoom\.[0-9a-f]{12})$"
 )
 
 MAX_IMPORTS = 200
@@ -162,6 +167,28 @@ def resolve(project_id: str, key: Any) -> dict:
     kind, parts = parse_key(key)
     project = storage.read_project(project_id)
 
+    if kind == KIND_ZOOM:
+        from . import zooms  # zooms imports this module
+
+        try:
+            manifest = zooms.read_run(project_id, parts[0])
+            path = zooms.output_path(project_id, manifest)
+        except storage.ProjectError as error:
+            raise CaptionInputError(
+                "That zoomed video is no longer available: %s" % error.message, status_code=404
+            ) from error
+        return {
+            "key": key,
+            "kind": kind,
+            "label": "Zoomed — %s" % manifest["input"]["label"],
+            "filename": manifest["input"]["filename"],
+            "path": str(path),
+            "run_id": parts[0],
+            "output_id": None,
+            "created_at": manifest.get("finished_at") or manifest.get("created_at"),
+            "timing_parent_key": manifest["input"]["key"],
+        }
+
     if kind == KIND_CUT:
         run_id, output_id = parts
         try:
@@ -232,7 +259,40 @@ def list_inputs(project_id: str) -> list[dict]:
     for entry in read_imports(project):
         inputs.append(_listing("import.%s" % entry["id"], project_id))
 
+    from . import zooms  # zooms imports this module
+
+    for manifest in zooms.list_runs(project_id):
+        if manifest.get("status") == zooms.RUN_SUCCEEDED:
+            inputs.append(_listing("zoom.%s" % manifest["run_id"], project_id))
+
     return [entry for entry in inputs if entry is not None]
+
+
+def timing_identity(project_id: str, key: Any) -> dict:
+    """Which transcripts belong to this video: `{key, fingerprint}`.
+
+    For most inputs that is the input itself. A zoomed video only reframes
+    its parent — same frames at the same times, same audio — so its captions
+    are the parent's: `key` is the parent's and `fingerprint` the parent's
+    digest *as recorded when it was zoomed*. `fingerprint` is None when that
+    lineage no longer holds (the zoomed file changed, or the parent's bytes
+    changed since), so nothing is reused across a real change.
+    """
+    kind, parts = parse_key(key)
+    if kind != KIND_ZOOM:
+        return {"key": key, "fingerprint": describe(project_id, key)["fingerprint"], "via_zoom": False}
+
+    from . import zooms
+
+    try:
+        parent = zooms.timing_parent(project_id, parts[0])
+        resolved = resolve(project_id, parent["key"])
+        current = fingerprint(resolved["path"]) if os.path.isfile(resolved["path"]) else None
+    except storage.ProjectError:
+        return {"key": None, "fingerprint": None, "via_zoom": True}
+    if current is None or current["digest"] != parent["digest"]:
+        return {"key": parent["key"], "fingerprint": None, "via_zoom": True}
+    return {"key": parent["key"], "fingerprint": current, "via_zoom": True}
 
 
 def _listing(key: str, project_id: str) -> dict | None:

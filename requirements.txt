@@ -6,6 +6,10 @@ uvicorn
 # never breaks startup.
 anthropic
 
+# Zoom planning (stage 2B). Google's official Gemini SDK; the key is read from
+# GEMINI_API_KEY in the backend's environment. Imported lazily.
+google-genai>=2.28
+
 # Subtitles. Whisper runs locally on the CPU; the model is downloaded from
 # Hugging Face on first use and cached, after which no network is needed.
 faster-whisper

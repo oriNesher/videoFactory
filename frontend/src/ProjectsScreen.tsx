@@ -11,6 +11,7 @@ import CaptionsPanel from './CaptionsPanel'
 import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
 import PlanPanel from './PlanPanel'
+import ZoomsPanel from './ZoomsPanel'
 import type { Project, ProjectListing, SourceMedia } from './types'
 
 type Message = { kind: 'ok' | 'error'; text: string } | null
@@ -458,6 +459,12 @@ export default function ProjectsScreen() {
 
             <CaptionsPanel
               key={`captions-${project.id}`}
+              project={project}
+              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+            />
+
+            <ZoomsPanel
+              key={`zooms-${project.id}`}
               project={project}
               onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
             />

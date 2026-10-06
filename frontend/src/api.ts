@@ -27,6 +27,11 @@ import type {
   SubtitleSettings,
   ToolStatus,
   ToolVersion,
+  ZoomApproveResult,
+  ZoomInputState,
+  ZoomOverlayReference,
+  ZoomRun,
+  ZoomStatus,
 } from './types'
 import type { CaptionStyle } from './captions/types'
 
@@ -544,13 +549,64 @@ export function startCaptionExport(
   transcriptId: string,
   revision: number,
   format: 'mp4' | 'srt',
+  /** Draw on a zoomed version of the transcript's video instead (lineage-checked). */
+  inputKey: string | null = null,
 ) {
   return request<Job>(`${captionsBase(projectId)}/exports`, {
     method: 'POST',
-    body: JSON.stringify({ transcript_id: transcriptId, revision, format }),
+    body: JSON.stringify({ transcript_id: transcriptId, revision, format, input_key: inputKey }),
   })
 }
 
 export function captionExportUrl(projectId: string, exportId: string, download: boolean) {
   return `${API_BASE}${captionsBase(projectId)}/exports/${exportId}/file${download ? '?download=true' : ''}`
+}
+
+// --- zooms (stage 2B) ---------------------------------------------------------
+
+const zoomsBase = (projectId: string) => `/projects/${projectId}/zooms`
+
+/** Provider readiness (never the key), presets, inputs and settings. */
+export function getZoomStatus(projectId: string) {
+  return request<ZoomStatus>(`${zoomsBase(projectId)}/status`)
+}
+
+export function saveZoomSettings(projectId: string, changes: { preference?: string; selected_input?: string }) {
+  return request<ZoomStatus['settings']>(`${zoomsBase(projectId)}/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(changes),
+  })
+}
+
+/** State only: reading never calls the AI provider or renders anything. */
+export function getZoomInput(projectId: string, inputKey: string) {
+  return request<ZoomInputState>(`${zoomsBase(projectId)}/inputs/${inputKey}`)
+}
+
+/** Idempotent: returns the running job, a reused result, or a new job. */
+export function startZooms(
+  projectId: string,
+  inputKey: string,
+  options: { forceReplan?: boolean; planId?: string } = {},
+) {
+  return request<{ job: Job | null; reused: ZoomRun | null }>(`${zoomsBase(projectId)}/runs`, {
+    method: 'POST',
+    body: JSON.stringify({
+      input_key: inputKey,
+      force_replan: options.forceReplan ?? false,
+      plan_id: options.planId ?? null,
+    }),
+  })
+}
+
+export function approveZoomRun(projectId: string, runId: string, outputDigest: string, captions: ZoomOverlayReference) {
+  return request<ZoomApproveResult>(`${zoomsBase(projectId)}/runs/${runId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ output_digest: outputDigest, captions }),
+  })
+}
+
+/** The actual FFmpeg output, by run id. */
+export function zoomVideoUrl(projectId: string, runId: string, download = false) {
+  return `${API_BASE}${zoomsBase(projectId)}/runs/${runId}/video${download ? '?download=true' : ''}`
 }

@@ -982,8 +982,7 @@ npm.cmd run build
 
 ## Stage 2A — transcription, editable captions, Remotion preview and export
 
-Status: complete. Next: **Stage 2B — zoom planning and rendering**, as a layer
-in the same composition.
+Status: complete. Followed by Stage 2B (below).
 
 ### What I found first
 
@@ -1184,3 +1183,185 @@ file); playback in browsers other than Chrome.
 See the README's captions section. In short: no remapping of captions across
 re-cuts; stepwise transcription progress; no word-level timing editor or
 waveform; one template; GPU untested; slow 4K renders on a laptop CPU.
+
+## Stage 2B — automatic zoom planning (Gemini) and rendering
+
+Status: complete for the mechanics; editorial quality on real footage still
+needs your review (below).
+
+### What I found first
+
+- **No CLAUDE.md, no PRODUCT_PRINCIPLES.md, and no "UX refinement session"**
+  anywhere in the repository — not on any branch, stash or worktree. Modules
+  are stacked panels in the project editor; there was no automatic module
+  pipeline and no "Approve and continue" flow to preserve. I built the
+  minimum Stage 2B needs (one-click automatic chain, review, approve, then
+  the existing export) and did not invent a cross-module pipeline.
+- The legacy presets are named `NORMAL`, `PUNCH_LIGHT`, `PUNCH_MEDIUM`,
+  `PUNCH_STRONG` (1.00 / 1.08 / 1.12 / 1.20) — kept exactly. The legacy
+  renderer cut each clip into `trim`/`atrim` pieces and concatenated them,
+  splitting and resampling the audio at every change; `FACE_CENTER` was a
+  fixed centre crop. Nothing in the app had used it.
+- The Whisper transcripts and caption revisions from 2A are keyed by input
+  key + content fingerprint, which made exact reuse straightforward.
+
+### What was built
+
+**Backend:**
+
+| File | Role |
+| --- | --- |
+| `gemini.py` | New. Adapter over `google-genai`: one JSON request with a response schema; classified, redacted errors; `call_with_retries` (bounded, visible, cancellable); SDK retries off |
+| `zoom_planner.py` | New. Preset catalog, prompt, response schema, the request sent, plan validation and technical normalisation, Gemini and demo planners, one-repair flow, provider status |
+| `zooms.py` | New. Settings, inputs, transcript lookup, plan and run storage, crop geometry, filter graph and FFmpeg command, FFprobe verification, lineage, review state and approval |
+| `zoom_jobs.py` | New. The `zoom_auto` job: transcript → plan → render, each stage reused when possible |
+| `api_zooms.py` | New. The router below |
+| `scripts/gemini_smoke_test.py` | New. The opt-in live check (`--yes`) |
+| `tests/test_zooms.py` | New. 75 tests |
+| `caption_inputs.py` | `zoom.<run-id>` input kind; `timing_identity` (lineage) |
+| `api_captions.py`, `caption_jobs.py` | Zoomed videos show/export their parent's captions; transcribing one reuses the parent's transcript; export takes an optional `input_key`, lineage-checked |
+| `capabilities.py`, `job_tasks.py` | `zooms.auto` registered (`CATALOG_VERSION` → 5) with an executor using the same job code |
+| `config.py` | Zoom provider settings (`GEMINI_API_KEY`, model, timeout) |
+| `resources.py` | `settings.zooms` excluded from the plan fingerprint |
+| `models.py`, `main.py` | Request bodies; router and job registration |
+
+**Frontend:** `ZoomsPanel.tsx` (new), zoom types and API calls, Captions panel
+lists zoomed videos and exports them with the parent's captions, a few CSS
+rules. No new dependency.
+
+Endpoints, under `/projects/{id}/zooms`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/status` | Provider status (key presence only), presets, renderer, inputs, settings |
+| `PUT` | `/settings` | Preference and selected video |
+| `GET` | `/inputs/{key}` | Transcript availability, active/last job, current run with review state, run history |
+| `POST` | `/runs` | Start (idempotent: returns the active job or a reusable result) |
+| `GET` | `/runs/{run}` | Run, plan, review state, continuation |
+| `GET` | `/runs/{run}/video` | The FFmpeg output (Range; `?download=true`) |
+| `GET` | `/plans/{plan}` | The stored plan, including the exact request sent |
+| `POST` | `/runs/{run}/approve` | Approve exactly what was reviewed, then start the export |
+
+### Gemini
+
+- **Model:** `gemini-3.5-flash` (configurable: `VIDEO_FACTORY_GEMINI_MODEL`).
+  Checked on 2026-10-06 against ai.google.dev: listed stable on the models
+  page with structured outputs; free tier offered for text on the pricing
+  page. A stable, established Flash was preferred over the newest
+  (`gemini-3.8-flash`).
+- **SDK:** `google-genai` 2.28.0, verified by introspection:
+  `GenerateContentConfig(response_mime_type, response_json_schema,
+  system_instruction, max_output_tokens, automatic_function_calling)`,
+  `HttpOptions(timeout, retry_options=HttpRetryOptions(attempts=1))`,
+  `errors.APIError(code, status, message, details)`.
+- **Docs consulted:** models, pricing, structured-output, rate-limits,
+  api-errors, troubleshooting and the Gemini API terms (free-tier data use:
+  may improve Google's products, human review possible, no sensitive data).
+  The structured-output page now shows a newer `interactions` API; the
+  `generate_content` path used here is the one the installed SDK documents
+  and the live test exercised.
+- **Retries:** see README. Three attempts at most, the API's `RetryInfo`
+  delay honoured up to 65 s, daily quotas never retried, no fallback.
+- **Free tier:** the app cannot verify billing status and does not claim to.
+  The README tells you where to check. You confirmed your dedicated project
+  is on the free tier and keep the key in a Windows user variable.
+- **Live test:** one request, run once with your key passed from the user
+  environment into that process only: **SUCCESS** — a structured plan that
+  passed validation, 1,681 tokens. Nothing was printed but the outcome.
+  After it I disabled the SDK's automatic function calling (we offer no
+  tools; the SDK logged a notice about it); that config change is covered by
+  the fake-client test and was not re-tested live.
+
+### Decisions
+
+**Durations belong to the model.** Validation rejects what is broken and
+records what it snaps; it never reshapes timings. Tests prove a 95 s single
+NORMAL interval, a 0.28 s strong punch and uneven intervals all pass
+unchanged.
+
+**Renderer: overlay by timestamp, not trim + concat.** Each zoomed preset in
+use is a crop+scale branch overlaid on the untouched frame while its
+intervals are active (`enable='gte(t,a)*lt(t,b)+…'`, boundaries half a frame
+early so float noise cannot move a frame across one). Every frame keeps its
+own timestamp, so duration, frame count and VFR timing are the input's; the
+audio is copied, not cut into pieces. Measured on fixtures: identical frame
+counts, identical decoded-audio MD5.
+
+**One job, three stages, reuse at each.** Plans are keyed by input bytes,
+transcript id + revision, provider, model, prompt version, preset catalog and
+preference; renders by input bytes, plan id, renderer version and encoder.
+A stored plan is re-validated before reuse.
+
+**Lineage instead of re-transcription.** A zoom output records its timing
+parent (key + digest). The captions module resolves a zoomed video's
+transcripts through it, refuses to transcribe the zoomed file, and refuses an
+export whose captions are not the parent's. Broken lineage (either file's
+bytes changed) shares nothing.
+
+**Approval is a separate file naming the output digest and the caption
+revision + style revision that were shown.** Derived on read: outdated when
+any of them, or the input, changes. Never re-renders.
+
+**Continue = existing export.** No later module exists, so approval starts
+the Captions MP4 export with `input_key=zoom.<run>` (or, with no captions,
+the zoomed file is final). An existing matching export is reused.
+
+**Inputs.** Cut outputs, footage and imports — never a zoomed video, never a
+captioned export. Preselected: newest merged cut video, else a cut clip, else
+the first available video.
+
+### Checks performed
+
+Automated, on this machine:
+
+- `.venv\Scripts\python.exe -m pytest backend\tests -q` → **424 passed (349 existing + 75 new)**.
+  `test_zooms.py` has 75 tests (run twice in a row, stable). One existing
+  test updated, not weakened: the catalog-invariant test lists `zooms.auto`.
+- `npm.cmd run build` → succeeded (the existing >500 kB chunk warning).
+- `npm.cmd test` → 6 passed.
+- `npm.cmd run lint` → seven `set-state-in-effect` warnings: the five
+  pre-existing ones plus two in `ZoomsPanel.tsx` of the same mount-time
+  fetch/reset pattern used by the other panels.
+- Secrets: the real key's value was searched for (by the shell, without
+  printing it) across `frontend\dist`, `frontend\src`, `backend`, `workspace`,
+  the README and docs → not found. Git history: only `.env.example` was ever
+  committed; no key-like string in any commit. `.env`/`.env.*` ignored,
+  `.env.example` not.
+
+Real media:
+
+- Grid fixture (320×240, 25 fps, 4 s): frames 0, 24, 25, 40, 64, 65, 99
+  compared with the source and with the source cropped once / twice — the
+  zoom starts exactly at frame 25 (1.00 s), ends after frame 64, is applied
+  once. 100/100 frames, 4.0 s, audio MD5 identical.
+- Caption composition: a flat-colour fixture zoomed to 120% and exported with
+  captions through Remotion, compared with the unzoomed export of the same
+  caption revision: PSNR > 40 dB on frames with captions (captions identical
+  in size and place), audio identical, one video + one audio stream.
+- In headless Chrome against a throwaway backend (demo planner, stand-in
+  Whisper, separate workspace; your servers and `workspace\` untouched):
+  select the project → **Create zooms** → review (plan table, FFprobe line
+  "120 of 120 frames, audio aac (copied once)") → **Approve and continue** →
+  captioned export → **Download the captioned, zoomed video**. No console
+  errors. A frame from that export at 1.3 s shows the punch-in with the Hebrew
+  caption at the same size and position as at 0.5 s (unzoomed).
+- Found by running it: with only raw footage (no cut yet) nothing was
+  preselected; the default now falls back to the first available video.
+
+**Not verified here, and yours to judge:** how Gemini's plans *feel* on real
+Hebrew talking-head footage (rhythm, emphasis, whether 120% is too tight for
+your framing), behaviour under real quota exhaustion (classification is
+tested with recorded response shapes, not a live 429), and long or 4K inputs.
+
+### Known limitations
+
+See the README's zooms section. In short: centre crop only, instant cuts
+only, no face tracking, no manual zoom editor, free-tier data use unsuitable
+for confidential scripts, no module pipeline for a "skip" to advance.
+
+### Walkthrough
+
+Cut takes → **Zooms**: the merged video is preselected → **Create zooms**
+(transcribes if needed, plans with Gemini, renders, verifies) → watch the
+real result with your captions on top, read *Style applied* → **Approve and
+continue** → the captioned, zoomed MP4 is exported → **Download**.

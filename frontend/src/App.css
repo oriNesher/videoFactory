@@ -957,3 +957,42 @@ input.invalid {
   border-radius: 6px;
   padding: 8px;
 }
+
+/* --- zooms (stage 2B) ---------------------------------------------------- */
+
+a.button {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  text-decoration: none;
+  color: var(--text-h);
+}
+
+a.button.primary {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.zooms details {
+  margin-top: 12px;
+}
+
+.zooms details summary {
+  cursor: pointer;
+}
+
+.zooms table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+}
+
+.zooms th,
+.zooms td {
+  border-bottom: 1px solid var(--border);
+  padding: 4px 6px;
+  text-align: start;
+  vertical-align: top;
+}

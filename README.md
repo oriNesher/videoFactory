@@ -4,18 +4,20 @@ A local application for producing talking-head videos through one interface,
 instead of driving separate command-line tools by hand.
 
 Everything runs on this machine. There is no cloud storage, no authentication
-and no upload of any kind. The one exception is deliberate and opt-in: if you
-configure a real AI provider, asking for an editing plan sends text and
-metadata — never media — to that provider. See
-[AI plans](#ai-plans-mock-mode-and-the-real-provider).
+and no upload of media of any kind. Two exceptions send **text only**, and
+only when configured: an AI editing plan (see
+[AI plans](#ai-plans-mock-mode-and-the-real-provider)), and **zoom planning**,
+which sends a video's transcript and timings to Google's Gemini API (see
+[Zooms](#zooms-stage-2b)). Video and audio never leave the computer.
 
-Current state: **stage 2A** — projects, background jobs, structured AI
+Current state: **stage 2B** — projects, background jobs, structured AI
 editing plans, cutting in two modes (**boundary-only trimming**, the default,
-and **full-clip silence removal** with Auto-Editor), and now **captions**:
-local Hebrew transcription with Whisper, editable caption revisions, one
-caption template with a few style controls, a live Remotion preview, and
-export as an MP4 with burned-in captions or as an SRT. See
-[Captions](#captions-stage-2a) and [docs/PROGRESS.md](docs/PROGRESS.md).
+and **full-clip silence removal** with Auto-Editor), **captions** (local
+Hebrew transcription with Whisper, editable caption revisions, a Remotion
+preview, MP4 or SRT export), and now **automatic zooms**: Gemini plans
+punch-in zooms from the transcript, FFmpeg renders them on the clean video,
+you review the real result with the captions on top and approve it. See
+[Zooms](#zooms-stage-2b) and [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Requirements
 
@@ -29,6 +31,7 @@ Already verified on this machine:
 | FFmpeg / FFprobe | 8.1.2 (`C:\tools`) |
 | Auto-Editor | 31.3.2 (`C:\tools`) |
 | faster-whisper | 1.2.1 in `.venv` (CTranslate2 4.8.2), from `requirements.txt` |
+| google-genai | 2.28.0 in `.venv` (zoom planning), from `requirements.txt` |
 | Remotion | 4.0.532 (`remotion`, `@remotion/player`, `@remotion/media`, `@remotion/bundler`, `@remotion/renderer`) in `frontend/node_modules` |
 
 FFmpeg, FFprobe, Auto-Editor and Node.js (`node`) must be reachable through
@@ -63,6 +66,10 @@ $env:VIDEO_FACTORY_LLM_PROVIDER = "mock"
 | `ANTHROPIC_API_KEY` | *(empty)* | Only used when the provider is `anthropic` |
 | `VIDEO_FACTORY_LLM_MODEL` | `claude-opus-5` | The model used for plan generation |
 | `VIDEO_FACTORY_LLM_TIMEOUT` | `120` | Seconds one provider request may take |
+| `GEMINI_API_KEY` | *(none)* | Zoom planning. Best kept as a **Windows user environment variable** (see [Zooms](#setting-up-gemini-once)), not in `.env` |
+| `VIDEO_FACTORY_ZOOM_PROVIDER` | `gemini` | `gemini`, or `mock` for labelled demo rules with no network |
+| `VIDEO_FACTORY_GEMINI_MODEL` | `gemini-3.5-flash` | The Gemini model used for zoom plans |
+| `VIDEO_FACTORY_GEMINI_TIMEOUT` | `90` | Seconds one Gemini request may take |
 
 Keys live only in the backend process. They are never written to a project
 file, a job record or a plan, never logged, and never sent to the browser — the
@@ -137,16 +144,17 @@ executable expression — there is no field that could hold one. The model
 proposes; the backend validates; **you** approve. Nothing runs without an
 explicit approval and an explicit **Run** press.
 
-Four capabilities are registered: `diagnostics.tool_check` (a diagnostic),
+Five capabilities are registered: `diagnostics.tool_check` (a diagnostic),
 `edit.trim_boundaries` (boundary-only trimming, milestone 1B),
-`edit.cut_silence` (full-clip silence removal, milestone 1A) and
+`edit.cut_silence` (full-clip silence removal, milestone 1A),
 `captions.transcribe` (Whisper transcription of one footage file into
-editable captions, stage 2A). Two cutting capabilities rather than one with a
-mode parameter: a plan's capability id says by itself whether pauses inside a
-clip will be removed. Caption *export* is not a plan capability — captions are
-reviewed and exported in the Captions section — and zooms, B-roll and audio
-are still not registered, so a request for them is answered with an
-explanation rather than an invented plan.
+editable captions, stage 2A) and `zooms.auto` (automatic zooms on one footage
+file, stage 2B — the same code as the Zooms section). Two cutting capabilities
+rather than one with a mode parameter: a plan's capability id says by itself
+whether pauses inside a clip will be removed. Caption *export* is not a plan
+capability — captions are reviewed and exported in the Captions section — and
+B-roll and audio are still not registered, so a request for them is answered
+with an explanation rather than an invented plan.
 
 **Cutting does not need AI.** The normal flow is the **Cutting** section: set
 the numbers, look at the previews, press **Render clips and merged video**. No
@@ -792,6 +800,251 @@ too, but its time was not recorded.
 - **The older per-run subtitles** (below) still work and are separate: they
   write an SRT straight from Whisper with no editing.
 
+## Zooms (stage 2B)
+
+Open a project and scroll to **Zooms**. Choose a video (the newest merged cut
+video is preselected) and press **Create zooms**. Everything else is
+automatic, in one background job:
+
+1. **Transcript.** The newest transcript of exactly this video is reused —
+   its latest caption revision, so corrections you made in **Captions** count.
+   If there is none, Whisper transcribes it locally first (the model must have
+   been downloaded once in **Captions**).
+2. **Plan.** Gemini receives the transcript and returns a zoom plan as
+   structured JSON, which the backend validates against the real video.
+3. **Render.** FFmpeg applies the plan to the clean video. The result is
+   checked with FFprobe before it is offered.
+4. **Review.** The player shows the actual rendered file, with your existing
+   captions drawn on top by the same Remotion composition the export uses.
+   A one-line description of the editing style is shown; the plan, the
+   per-interval reasons and the technical checks are under **Plan and
+   technical details**.
+5. **Approve and continue.** With captions, this starts the Captions export
+   of the zoomed video (captions over the zoomed picture) and offers the
+   download when it finishes. Without captions, the zoomed video is the
+   finished file. No later module (B-roll, audio) exists yet, so export is
+   the next step.
+
+There is no plan-approval step before rendering, no transcript to copy and
+no plan to import.
+
+### Setting up Gemini (once)
+
+1. Sign in at <https://aistudio.google.com>, create a **dedicated project**,
+   and create an API key in that project (**Get API key**).
+2. **Check that the project is on the free tier:** in AI Studio open the
+   **Projects** page (or **Usage & billing**) and confirm the project shows
+   the *Free* tier with no billing account linked, and that the key you
+   created is listed under *that* project. The app cannot see billing status
+   and does not claim to; this check is yours. Do not link billing, buy
+   credits or upgrade the project — nothing in this app needs it. A model
+   name alone does not guarantee zero cost: a key from a billed project is
+   billed.
+3. Store the key as a Windows **user** environment variable, never in a file
+   in this repository:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "paste-the-key-here", "User")
+   ```
+
+4. **Open a new terminal** (running programs, including VS Code's terminals,
+   keep their old environment) and start the backend from it. The Zooms badge
+   shows `Google Gemini · gemini-3.5-flash` when the key is found.
+
+To check the connection by hand — one tiny request with two invented
+sentences, no retries, printing only success or a sanitised error:
+
+```powershell
+cd C:\Users\orinesher\Documents\videoFactory
+.\.venv\Scripts\python.exe -m backend.scripts.gemini_smoke_test --yes
+```
+
+Without `--yes` it sends nothing. It is never run by the test suite.
+
+### The model
+
+`gemini-3.5-flash`, chosen on 2026-10-06 from Google's official pages:
+[models](https://ai.google.dev/gemini-api/docs/models) (stable, not preview;
+structured outputs supported),
+[pricing](https://ai.google.dev/gemini-api/docs/pricing) (free tier offered
+for text input and output),
+[structured output](https://ai.google.dev/gemini-api/docs/structured-output),
+[rate limits](https://ai.google.dev/gemini-api/docs/rate-limits) and
+[API errors](https://ai.google.dev/gemini-api/docs/api-errors). A stable,
+established Flash model was preferred over the newest one. Change it with
+`VIDEO_FACTORY_GEMINI_MODEL`, after checking the pricing page: not every
+Gemini model has a free tier. The call goes through Google's official
+`google-genai` SDK (2.28): `client.models.generate_content` with
+`response_mime_type="application/json"` and `response_json_schema`.
+
+### What is sent to Google, and what Google may do with it
+
+Sent, per plan: the transcript text with phrase times (and approximate word
+times where known), the video's duration, frame rate and orientation, where
+takes were joined (for a merged cut video), the four presets and your
+editing-style preference. **Never sent:** video, audio, file names, paths,
+the project name. The prompt tells the model it has not seen or heard the
+video. The exact request is stored with each plan (`request_sent`).
+
+On the free tier, Google's [terms](https://ai.google.dev/gemini-api/terms)
+(last modified 2026-03-23) say prompts and responses may be used to improve
+Google's products and **may be read by human reviewers** (after being
+disconnected from your account and key), and ask you not to submit
+sensitive, confidential or personal information. Do not use free-tier zoom
+planning for scripts that must stay confidential.
+
+### Keys and secrets
+
+- The backend reads the key from `GEMINI_API_KEY` only. It is not in React
+  code, not a `VITE_*` variable, not returned by any endpoint (the status only
+  says whether a key is present), and not written to plans, job records, run
+  manifests, logs or exports. Error text from Google is redacted before it is
+  shown or stored.
+- `.gitignore` excludes `.env` and `.env.*` but keeps `.env.example`, which
+  holds only empty placeholders. Checked on 2026-10-06: no `.env` file and no
+  key-like string has ever been committed to this repository's history.
+- If a key is ever committed or pasted somewhere public, **revoke it in AI
+  Studio and create a new one** — deleting it from the file afterwards is not
+  enough. Making the repository private is not a substitute either.
+
+### Quotas and retries
+
+- Free-tier limits are per project and per model; AI Studio shows them.
+  Daily quotas reset at midnight Pacific time.
+- A rate limit (HTTP 429) is retried at most twice (three attempts in all),
+  waiting the delay the API returns when it gives one. The job shows
+  "Gemini's free-tier rate limit was reached… Waiting N s before attempt 2
+  of 3". A delay over 65 s is not waited out inside the job — it fails with
+  the delay, and **Retry** is yours to press.
+- A daily quota is never retried. Server errors (500/503/504), timeouts and
+  connection errors get the same three-attempt limit. The SDK's own retries
+  are switched off so every wait is visible.
+- There is **no fallback**: a missing key, an exhausted quota or an outage
+  fails the job with a reason. Nothing is ever routed to another provider or
+  model, paid or not.
+
+### The zoom decision model
+
+Four fixed presets, unchanged from `legacy/ZoomRenderer/render_zoom_plan.py`
+(where they are named exactly like this):
+
+| Preset | Scale |
+| --- | --- |
+| `NORMAL` | 1.00 |
+| `PUNCH_LIGHT` | 1.08 |
+| `PUNCH_MEDIUM` | 1.12 |
+| `PUNCH_STRONG` | 1.20 |
+
+The model chooses, for every interval, the preset and its start and end — so
+it alone decides how long each framing lasts. There is no fixed duration, no
+required number of zooms, no minimum or maximum length and no periodic
+change. The prompt gives editorial guidance only: follow the speech, change
+between phrases or at the joins between takes, keep strong framing for real
+emphasis, avoid distracting rapid switches. The editing-style setting
+(*subtle / balanced / energetic*, under **Settings**) is guidance in the
+prompt, not a rule applied to the timings.
+
+The model cannot send a scale, a command or any field outside
+`start / end / preset / reason`. The backend validates every answer: known
+presets only, finite ordered times, no overlaps or real gaps, inside the
+video, covering it from 0 to its end, no interval shorter than a frame. It
+then makes only **technical** adjustments, all listed under *Adjustments made
+by the app*: every boundary moves to the nearest frame (at most half a
+frame); a first start / last end within 0.15 s (+1 frame) of 0 / the end is
+snapped to it; a gap or overlap of at most 0.05 s (+1 frame) between
+neighbours is closed. Anything larger is rejected: the model gets **one**
+correction request listing the problems, and if that is also invalid the job
+fails, nothing is rendered, and the rejected answers are saved
+(`plans\rejected-*.json`). A failure never turns into a default edit.
+
+### What the renderer really does
+
+The FFmpeg adapter keeps the legacy renderer's geometry and drops its fragile
+parts:
+
+- Each zoomed preset is a **centre crop** scaled back to the full frame with
+  Lanczos. The crop's height is even and its width follows the frame's aspect
+  ratio, so the scale is uniform to within a pixel; the crop is always inside
+  the frame, so there are **no black borders and no stretching**.
+- Changes are **instant cuts**. There is no animation and **no face detection
+  or tracking** — the legacy `FACE_CENTER` label only ever meant a fixed
+  centre crop, and it is not part of the new schema.
+- Unlike the legacy script, the video is **not cut into pieces and
+  concatenated**: each zoomed preset is overlaid on the untouched frame only
+  while one of its intervals is active, decided by each frame's own
+  timestamp. Every frame keeps its time, so duration and frame count are
+  exactly the input's, including variable-frame-rate phone video.
+- The audio is the input's own track, mapped once and **copied** when it is
+  AAC (bit-identical), otherwise encoded to AAC once.
+- Output: H.264 (libx264, `medium`, CRF 18), yuv420p, `+faststart`, at the
+  input's size. It is written to `.partial.mp4`, checked with FFprobe
+  (exactly one video stream, one audio stream if the input had one, the
+  input's dimensions, duration within one frame + 0.05 s, **the same number
+  of video frames**), and only then renamed.
+- The backend writes the filter graph from validated numbers; the model never
+  supplies a command, a path or code.
+
+### Timing and captions
+
+- **One timebase per plan:** seconds from the first frame of the exact input
+  file (for a merged cut video, of the merged file). The transcript was made
+  from that same file, so no conversion is needed; for a merged video the
+  joins between takes come from the cutting run's own record of where each
+  clip landed.
+- Timing precision is reported honestly: Whisper phrase times always, word
+  times only where the caption revision still has them, both labelled as
+  approximate.
+- **Zooms are applied to clean video.** A zoomed video cannot be zoomed
+  again, and a captioned export is never offered as an input. Captions stay a
+  separate layer: the review player and the export draw them over the zoomed
+  picture at their normal size and position. Burned-in captions in an
+  imported video are not removed — import clean video if you will zoom it.
+- **Lineage.** Because zooming changes framing only, a zoomed video records
+  its *timing parent* (the clean video's key and fingerprint). The Captions
+  section lists zoomed videos and uses the parent's transcripts and caption
+  revisions for them; **Transcribe** on a zoomed video reuses the parent's
+  transcript instead of running Whisper on the zoomed file. If the parent's
+  bytes change, or the zoomed file does, nothing is shared any more.
+- Re-cutting produces a new video (a new input) with no plan; a re-recorded
+  file under the same name changes the fingerprint, which marks earlier zoom
+  results stale and unapprovable.
+
+### Reuse, retries and approval
+
+- Pressing **Create zooms** again for the same video, transcript revision,
+  model and style returns the finished result instantly: no job, no Gemini
+  call, no render. Clicking while it runs returns the same job. Refreshing
+  the screen never calls Gemini.
+- **Retry** after a failed job re-runs the same snapshot; a plan the first
+  attempt saved is reused, so a failed render does not call Gemini again.
+  **Make a new plan** (under details) asks Gemini again, after a
+  confirmation.
+- Changing the caption style or a caption never re-renders zooms.
+- Every run has its own directory; earlier runs, plans and approvals are
+  never overwritten. A cancelled or failed run keeps its manifest, has no
+  output, and its partial file is deleted. Cancelling kills FFmpeg (or
+  Whisper, if it was transcribing).
+- **Approval names the exact result:** the output's fingerprint plus the
+  caption revision and style revision you saw. A changed caption, style or
+  input marks the approval outdated ("Review and approve again"); nothing is
+  re-rendered for that.
+
+### Known limitations (zooms)
+
+- **Editorial quality is unverified on real footage.** The tests prove the
+  mechanics on generated patterns; whether the punch-ins land on the right
+  lines of a real Hebrew talking-head video is yours to judge.
+- Centre crop only: an off-centre speaker stays off-centre, and may be cut at
+  120%.
+- Instant cuts only; no animated push-ins.
+- Free-tier data use (above) makes it unsuitable for confidential scripts.
+- No manual zoom editor. If the plan is wrong, change the style setting and
+  **Make a new plan**.
+- **Skip** is simply not pressing **Create zooms**: there is no module
+  pipeline yet that a skip would advance.
+- An input with odd pixel dimensions is padded by one black pixel to even
+  (H.264 needs even sizes), as the captions export already does.
+
 ## Subtitles with Whisper (per cutting run, older)
 
 The in-app replacement for `legacy/Whisper/transcribe_video.bat`, and the step
@@ -868,6 +1121,20 @@ unchanged, duration within tolerance; and cancelling a real render). Those two
 skip when the renderer is not prepared. `npm.cmd test` runs the seconds-to-frames
 tests in `frontend\tests\timing.test.ts`. No test loads a Whisper model.
 
+`backend\tests\test_zooms.py` covers stage 2B: the preset catalog, plan
+validation (variable AI durations kept, no pattern imposed, every invalid
+shape rejected, technical snapping recorded), crop geometry, the filter and
+command, what the request contains, the Gemini adapter against the real SDK
+types with a fake client (structured-output config, SDK retries off, error
+classification, redaction), bounded retries and no fallback, then the whole
+chain on a generated 320×240 grid: frames inspected around every zoom change
+(zoomed exactly once, from the right frame), frame count, duration,
+bit-identical audio, reuse without provider calls, repeated clicks, re-render
+from a stored plan, one repair then failure, quota handling, cancellation
+(stand-in and real FFmpeg), stale inputs, approval invalidation, caption
+lineage, and a **real Remotion export** proving captions keep their size and
+position over the zoomed video. No test calls Gemini.
+
 The Python tests use a throwaway workspace and a stubbed provider: they never
 touch `workspace\`, your footage, or the network.
 
@@ -903,6 +1170,8 @@ tools are not on `PATH`, those tests skip rather than fail.
 | Subtitles (older, per run) | `…\cuts\<run-id>\subtitles\<clip-id>.srt` |
 | Transcripts and caption revisions | `workspace\projects\<project-id>\captions\transcripts\<transcript-id>\` |
 | Caption exports (MP4, SRT) | `workspace\projects\<project-id>\exports\captions\<export-id>\` |
+| Zoom plans (immutable) | `…\intermediates\zooms\plans\<plan-id>.json` |
+| Zoom runs | `…\intermediates\zooms\runs\<run-id>\` (`manifest.json`, `filter.txt`, `zoomed.mp4`, `logs\`, `approval.json`) |
 | Remotion render bundle | `workspace\cache\remotion-bundles\` |
 | Whisper models | `%USERPROFILE%\.cache\huggingface\hub` |
 | Exports | `workspace\projects\<project-id>\exports\` |
@@ -1117,3 +1386,34 @@ plenty):
 fallback), punctuation at the left end of a Hebrew line, parentheses facing
 the right way around English words, numbers left-to-right inside the line, no
 caption touching the frame edge, portrait and landscape videos looking alike.
+
+### Zooms (stage 2B)
+
+**Walkthrough with a real merged Hebrew video** (after the Gemini setup):
+
+37. Cut a few takes in **Cutting** so a merged video exists. In **Zooms** it
+    is preselected, and the badge reads `Google Gemini · gemini-3.5-flash`.
+38. Press **Create zooms**. Watch the job line: "Transcribing…" (only if
+    there is no transcript yet), "Asking Google Gemini for a zoom plan…",
+    "Rendering the zoomed video — N%", "Checking the zoomed video with
+    FFprobe…". Press **Create zooms** a second time while it runs: nothing new
+    starts.
+39. Review: play the result. Check that punch-ins land between phrases, that
+    strong framing is rare and meaningful, that captions keep the same size
+    and position whatever the zoom, that the head is not cut at 120%, and that
+    lip sync is intact. Read *Style applied*, then open **Plan and technical
+    details**: the reasons, the frame counts, the adjustments.
+40. Edit a caption in **Captions** and save. Back in **Zooms**, the player
+    shows the edited caption, and nothing re-rendered.
+41. **Approve and continue.** The captioned export starts; when it finishes,
+    **Download the captioned, zoomed video** and play it in a normal player.
+    Save a caption change afterwards: the approval shows as outdated.
+42. In **Captions**, the zoomed video appears under *Zoomed video*, with the
+    clean video's captions and a note explaining why.
+43. Restart both terminals and reopen the project: the result, its approval
+    and the download are still there, and **Create zooms** returns the same
+    result without calling Gemini.
+
+**Editorial checklist (only real footage can answer):** does the rhythm feel
+natural, are hooks and calls to action emphasised, does anything change in
+the middle of a word, is 120% too tight for this framing?

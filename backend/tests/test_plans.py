@@ -120,9 +120,9 @@ def test_capability_catalog_only_lists_implemented_capabilities(client):
     by_id = {capability["id"]: capability for capability in catalog["capabilities"]}
 
     # Milestone 1B registers boundary-only trimming alongside it; stage 2A
-    # registers transcription for captions.
+    # registers transcription for captions; stage 2B automatic zooms.
     assert sorted(by_id) == sorted(
-        [TOOL_CHECK, CUT_SILENCE, capabilities.TRIM_BOUNDARIES, capabilities.TRANSCRIBE]
+        [TOOL_CHECK, CUT_SILENCE, capabilities.TRIM_BOUNDARIES, capabilities.TRANSCRIBE, capabilities.ZOOMS]
     )
 
     for capability in by_id.values():

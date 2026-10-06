@@ -144,6 +144,30 @@ class CaptionExportRequest(BaseModel):
     transcript_id: Any = None
     revision: Any = None
     format: Any = None
+    # The video to draw on, when it is not the transcript's own: a zoomed
+    # version of it (stage 2B). The backend checks the lineage.
+    input_key: Any = None
+
+
+class ZoomSettingsRequest(BaseModel):
+    preference: Any = None
+    selected_input: Any = None
+
+
+class ZoomStartRequest(BaseModel):
+    input_key: Any = None
+    preference: Any = None
+    # Ask the provider again even though a plan exists for this transcript.
+    force_replan: Any = None
+    # Render (or re-render) a stored plan without asking the provider.
+    plan_id: Any = None
+
+
+class ZoomApproveRequest(BaseModel):
+    # What the reviewer actually saw: the output's fingerprint and the caption
+    # revision / style revision drawn over it (or null for no captions).
+    output_digest: Any = None
+    captions: Any = None
 
 
 class StartSubtitlesRequest(BaseModel):

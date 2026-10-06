@@ -437,7 +437,8 @@ export default function CaptionsPanel({
   async function exportAs(format: 'mp4' | 'srt') {
     if (!transcriptId || !revision) return
     await run(async () => {
-      await startCaptionExport(projectId, transcriptId, revision.revision, format)
+      const zoomed = selectedKey?.startsWith('zoom.') ? selectedKey : null
+      await startCaptionExport(projectId, transcriptId, revision.revision, format, zoomed)
       onJobSubmitted()
       setMessage({
         kind: 'ok',
@@ -496,7 +497,7 @@ export default function CaptionsPanel({
           aria-label="Video to caption"
         >
           {inputs.inputs.length === 0 && <option value="">No videos yet</option>}
-          {(['cut', 'source', 'import'] as const).map((kind) => {
+          {(['cut', 'source', 'import', 'zoom'] as const).map((kind) => {
             const group = inputs.inputs.filter((input) => input.kind === kind)
             if (group.length === 0) return null
             return (
@@ -520,6 +521,12 @@ export default function CaptionsPanel({
         and export.
       </p>
 
+      {state?.timing_source?.via_zoom && (
+        <p className="message ok">
+          A zoomed video keeps every frame at its original time, so it uses the captions of the clean video it was
+          made from. They are drawn over the zoomed picture, never zoomed with it.
+        </p>
+      )}
       {detail?.error && <p className="message error">{detail.error}</p>}
       {detail?.metadata && composition && (
         <p className="small">

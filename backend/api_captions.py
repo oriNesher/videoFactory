@@ -86,13 +86,14 @@ def select_input(project_id: str, request: CaptionSelectionRequest):
     return {"selected": key}
 
 
-def _caption_jobs(project_id: str, input_key: str | None) -> dict:
+def _caption_jobs(project_id: str, input_key: str | None, timing_key: str | None = None) -> dict:
     active, recent = [], {}
+    keys = {input_key, timing_key} - {None}
     for record in jobs.list_jobs(project_id):
         if record["type"] not in caption_jobs.CAPTION_JOB_TYPES:
             continue
         record_key = (record["input"].get("input") or {}).get("key")
-        if input_key is not None and record_key not in (None, input_key):
+        if input_key is not None and record_key is not None and record_key not in keys:
             continue
         summary = {
             "id": record["id"],
@@ -124,23 +125,31 @@ def describe_input(project_id: str, input_key: str):
     video as it is now.
     """
     described = _call(caption_inputs.describe, project_id, input_key)
-    current = described["fingerprint"]
+    own = described["fingerprint"]
+    # A zoomed video shares its clean parent's timing, so it shows (and
+    # exports) the parent's transcripts and caption revisions.
+    if described["kind"] == caption_inputs.KIND_ZOOM:
+        identity = _call(caption_inputs.timing_identity, project_id, input_key)
+    else:
+        identity = {"key": input_key, "fingerprint": own, "via_zoom": False}
+    current = identity["fingerprint"]
     transcripts = [
         captions.summarise_transcript(project_id, transcript, current)
         for transcript in _call(captions.list_transcripts, project_id)
-        if transcript["input"]["key"] == input_key
+        if identity["key"] is not None and transcript["input"]["key"] == identity["key"]
     ]
     exports = [
         record for record in _call(caption_jobs.list_exports, project_id)
         if record.get("input_key") == input_key
     ]
     for record in exports:
-        record["stale"] = current is None or record.get("input_fingerprint") != current["digest"]
+        record["stale"] = own is None or record.get("input_fingerprint") != own["digest"]
     return {
         "input": described,
+        "timing_source": {"key": identity["key"], "via_zoom": identity["via_zoom"]},
         "transcripts": transcripts,
         "exports": exports,
-        **_caption_jobs(project_id, input_key),
+        **_caption_jobs(project_id, input_key, identity["key"]),
     }
 
 
@@ -159,10 +168,23 @@ def start_transcription(project_id: str, request: CaptionTranscriptionRequest):
     changes Whisper's output are the same. `force` always makes a new
     transcript; the earlier one and its revisions stay.
     """
-    raw = {"input_key": request.input_key, "settings": request.settings, "force": request.force is True}
+    input_key = request.input_key
+    kind, _ = _call(caption_inputs.parse_key, input_key)
+    if kind == caption_inputs.KIND_ZOOM:
+        # Never transcribe a zoomed file: its speech and timing are its
+        # parent's, so the parent is transcribed and the result shared.
+        identity = _call(caption_inputs.timing_identity, project_id, input_key)
+        if identity["fingerprint"] is None:
+            raise HTTPException(
+                status_code=409,
+                detail="The video this zoomed version was made from has changed or is missing, "
+                "so its captions cannot be shared. Make the zooms again.",
+            )
+        input_key = identity["key"]
+    raw = {"input_key": input_key, "settings": request.settings, "force": request.force is True}
     if request.force is not True:
         settings = _call(captions.validate_transcription_settings, request.settings)
-        described = _call(caption_inputs.resolve_for_job, project_id, request.input_key)
+        described = _call(caption_inputs.resolve_for_job, project_id, input_key)
         key = captions.reuse_key(described["fingerprint"]["digest"], settings)
         existing = _call(captions.find_reusable, project_id, key)
         if existing is not None:
@@ -287,7 +309,12 @@ def start_export(project_id: str, request: CaptionExportRequest):
         jobs.submit,
         project_id,
         caption_jobs.EXPORT_JOB,
-        {"transcript_id": request.transcript_id, "revision": request.revision, "format": request.format},
+        {
+            "transcript_id": request.transcript_id,
+            "revision": request.revision,
+            "format": request.format,
+            "input_key": request.input_key,
+        },
     )
     return jobs.describe_job(record)
 

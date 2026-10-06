@@ -758,7 +758,7 @@ export type GeneratedResource = {
 
 export type CaptionInputListing = {
   key: string
-  kind: 'cut' | 'source' | 'import'
+  kind: 'cut' | 'source' | 'import' | 'zoom'
   kind_label: string
   label: string
   filename: string
@@ -918,6 +918,8 @@ export type CaptionExport = {
 
 export type CaptionInputState = {
   input: CaptionInputDetail
+  /** Whose transcripts these are: a zoomed video shares its clean parent's. */
+  timing_source?: { key: string | null; via_zoom: boolean }
   transcripts: TranscriptSummary[]
   exports: CaptionExport[]
   active_jobs: CaptionJobSummary[]
@@ -958,4 +960,141 @@ export type CaptionCatalog = {
     problems: string[]
   }
   whisper: { loaded: boolean; model: string | null }
+}
+
+// --- zooms (stage 2B) ---------------------------------------------------------
+
+export type ZoomPreset = { id: string; scale: number; label: string; description: string }
+
+export type ZoomProviderStatus = {
+  provider: string
+  label: string
+  model: string
+  is_mock: boolean
+  ready: boolean
+  message: string
+  data_sent: string[]
+  free_tier_note: string | null
+}
+
+export type ZoomInputListing = {
+  key: string
+  kind: 'cut' | 'source' | 'import'
+  kind_label: string
+  label: string
+  filename: string
+  available: boolean
+  created_at: string | null
+}
+
+export type ZoomStatus = {
+  provider: ZoomProviderStatus
+  presets: ZoomPreset[]
+  preferences: { id: string; description: string }[]
+  renderer: { version: string; method: string; origin: string }
+  caption_renderer: { ready: boolean; problems: string[] }
+  settings: { preference: string; selected_input: string | null }
+  inputs: ZoomInputListing[]
+  selected_input: string | null
+}
+
+export type ZoomInterval = { start: number; end: number; preset: string; scale: number; reason: string }
+
+export type ZoomPlan = {
+  plan_id: string
+  created_at: string
+  summary: string
+  intervals: ZoomInterval[]
+  provider: { id: string; label: string; model: string; is_mock: boolean }
+  prompt_version: string
+  timebase: string
+  settings: { preference: string }
+  transcript: { transcript_id: string; revision: number; timing_precision: string; segment_count: number }
+  clips: { take: number; start: number; end: number }[] | null
+  statistics: { seconds_per_preset: Record<string, number>; interval_count: number; framing_changes: number }
+  normalisation: { frame_rate: number; max_shift_seconds: number; notes: string[] }
+  audit: { repair_used: boolean; calls: { attempts: number; usage: Record<string, number> }[] }
+}
+
+export type ZoomOverlay = {
+  transcript_id: string
+  revision: number
+  style_revision: number
+  style: import('./captions/types').CaptionStyle
+  language: string
+  direction: 'rtl' | 'ltr'
+  captions: import('./captions/types').Caption[]
+}
+
+export type ZoomOverlayReference = { transcript_id: string; revision: number; style_revision: number } | null
+
+export type ZoomReview = {
+  reviewable: boolean
+  stale: boolean
+  stale_reason: string | null
+  output_intact: boolean
+  overlay: ZoomOverlay | null
+  overlay_reference: ZoomOverlayReference
+  approval: { approved_at: string; captions: ZoomOverlayReference } | null
+  approved: boolean
+  approval_outdated_reason: string | null
+}
+
+export type ZoomContinuation =
+  | (CaptionExport & { job_id: string })
+  | { status: 'queued'; job_id: string; progress_message: string; progress_percent: number | null }
+  | null
+
+export type ZoomRun = {
+  run_id: string
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+  created_at: string
+  finished_at: string | null
+  plan_id: string
+  plan: ZoomPlan | null
+  renderer: { version: string; method: string }
+  output: { filename: string; size_bytes: number; fingerprint: { digest: string } } | null
+  verification: {
+    duration_seconds: number
+    input_duration_seconds: number
+    tolerance_seconds: number
+    width: number
+    height: number
+    video_frames: number | null
+    input_video_frames: number | null
+    audio_codec: string | null
+  } | null
+  error: string | null
+  review?: ZoomReview
+  continuation?: ZoomContinuation
+  output_key?: string
+}
+
+export type ZoomJobSummary = {
+  id: string
+  status: JobStatus
+  progress_message: string
+  progress_percent: number | null
+  cancel_requested: boolean
+  created_at: string
+  finished_at: string | null
+  error: string | null
+  result: Record<string, unknown> | null
+}
+
+export type ZoomInputState = {
+  input: CaptionInputDetail
+  transcript: { transcript_id: string; revision: number; caption_count: number } | null
+  active_job: ZoomJobSummary | null
+  last_job: ZoomJobSummary | null
+  current_run: ZoomRun | null
+  runs: { run_id: string; status: string; created_at: string; plan_id: string; error: string | null; stale: boolean }[]
+}
+
+export type ZoomApproveResult = {
+  approval: unknown
+  next:
+    | { kind: 'final'; message: string }
+    | { kind: 'blocked'; message: string }
+    | { kind: 'caption_export'; export: unknown; job: Job | null }
 }

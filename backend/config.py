@@ -34,6 +34,25 @@ DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_TIMEOUT_SECONDS = 600.0
 
 
+# --- zoom planning (stage 2B) -------------------------------------------------
+#
+# Zoom planning has its own provider setting so it can use Gemini's free tier
+# while the older plan/cutting features keep whatever they are configured with.
+# There is no fallback between providers: a missing key or an exhausted quota
+# is reported, never silently routed to a different (possibly paid) service.
+
+ZOOM_PROVIDER_ENV_VAR = "VIDEO_FACTORY_ZOOM_PROVIDER"
+GEMINI_API_KEY_ENV_VAR = "GEMINI_API_KEY"
+GEMINI_MODEL_ENV_VAR = "VIDEO_FACTORY_GEMINI_MODEL"
+GEMINI_TIMEOUT_ENV_VAR = "VIDEO_FACTORY_GEMINI_TIMEOUT"
+
+DEFAULT_ZOOM_PROVIDER = "gemini"
+# Stable, text-capable, structured-output capable and listed with a free tier
+# on https://ai.google.dev/gemini-api/docs/pricing (checked 2026-10-06).
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_GEMINI_TIMEOUT_SECONDS = 90.0
+
+
 def load_env_file(path: Path | None = None) -> None:
     """Read `KEY=VALUE` lines from `.env` into the environment.
 
@@ -98,4 +117,25 @@ def get_llm_settings() -> dict:
         "timeout_seconds": timeout,
         # Presence only. The value never leaves this process.
         "api_key_present": bool(os.environ.get(API_KEY_ENV_VAR, "").strip()),
+    }
+
+
+def _timeout(variable: str, default: float) -> float:
+    raw = os.environ.get(variable, "").strip()
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        value = default
+    if value != value:  # NaN
+        value = default
+    return min(max(value, 1.0), MAX_TIMEOUT_SECONDS)
+
+
+def get_zoom_provider_settings() -> dict:
+    """The zoom planner's provider. Never returns the API key itself."""
+    return {
+        "provider": os.environ.get(ZOOM_PROVIDER_ENV_VAR, "").strip().lower() or DEFAULT_ZOOM_PROVIDER,
+        "model": os.environ.get(GEMINI_MODEL_ENV_VAR, "").strip() or DEFAULT_GEMINI_MODEL,
+        "timeout_seconds": _timeout(GEMINI_TIMEOUT_ENV_VAR, DEFAULT_GEMINI_TIMEOUT_SECONDS),
+        "api_key_present": bool(os.environ.get(GEMINI_API_KEY_ENV_VAR, "").strip()),
     }

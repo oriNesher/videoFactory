@@ -527,12 +527,27 @@ def build_export_input(project_id: str, raw: Any) -> dict:
     transcript = captions.read_transcript(project_id, raw.get("transcript_id"))
     revision = captions.read_revision(project_id, transcript["id"], raw.get("revision"))
 
-    described = caption_inputs.resolve_for_job(project_id, transcript["input"]["key"])
-    stale = captions.staleness(transcript, described["fingerprint"])
+    video_key = raw.get("input_key") or transcript["input"]["key"]
+    if video_key == transcript["input"]["key"]:
+        described = caption_inputs.resolve_for_job(project_id, video_key)
+        stale = captions.staleness(transcript, described["fingerprint"])
+    else:
+        # Captions drawn over a different file are only allowed when that file
+        # is a zoom of exactly the bytes they were timed on (timing lineage).
+        kind, _ = caption_inputs.parse_key(video_key)
+        identity = caption_inputs.timing_identity(project_id, video_key) if kind == caption_inputs.KIND_ZOOM else None
+        if identity is None or identity["key"] != transcript["input"]["key"]:
+            raise captions.CaptionError(
+                "These captions belong to a different video and cannot be placed on this one.", status_code=409
+            )
+        stale = captions.staleness(transcript, identity["fingerprint"])
+        described = caption_inputs.resolve_for_job(project_id, video_key)
     if stale["stale"]:
         raise captions.CaptionError(stale["reason"], status_code=409)
 
     duration = transcript["input"]["metadata"]["duration_seconds"]
+    if abs(described["metadata"]["duration_seconds"] - duration) > 0.1:
+        raise captions.CaptionError("The video's length no longer matches the captions' timing.", status_code=409)
     normalised, errors = captions.normalise_captions(revision["captions"], duration)
     if errors:
         raise captions.CaptionValidationFailed(errors)

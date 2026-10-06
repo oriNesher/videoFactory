@@ -2,9 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import api_ai, api_captions, api_cutting, api_jobs, api_subtitles, jobs, projects, tools
+from . import api_ai, api_captions, api_cutting, api_jobs, api_subtitles, api_zooms, jobs, projects, tools
 from . import whisper_service
-from . import caption_jobs, job_tasks  # noqa: F401  - importing them registers the job types
+from . import caption_jobs, job_tasks, zoom_jobs  # noqa: F401  - importing them registers the job types
 from .config import WORKSPACE_ENV_VAR, get_workspace_root, load_env_file
 
 # Backend-only configuration, including provider credentials. Read once, at
@@ -33,6 +33,7 @@ app.include_router(api_jobs.router)
 app.include_router(api_cutting.router)
 app.include_router(api_subtitles.router)
 app.include_router(api_captions.router)
+app.include_router(api_zooms.router)
 app.include_router(api_ai.router)
 
 
