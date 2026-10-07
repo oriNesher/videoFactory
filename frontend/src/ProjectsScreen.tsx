@@ -7,6 +7,7 @@ import {
   openSourceInVlc,
   saveProject,
 } from './api'
+import BrollPanel from './BrollPanel'
 import CaptionsPanel from './CaptionsPanel'
 import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
@@ -465,6 +466,12 @@ export default function ProjectsScreen() {
 
             <ZoomsPanel
               key={`zooms-${project.id}`}
+              project={project}
+              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+            />
+
+            <BrollPanel
+              key={`broll-${project.id}`}
               project={project}
               onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
             />

@@ -490,7 +490,13 @@ def make_grid_video(path: Path, seconds=4, size="320x240", rate=25, colour=None)
 
 @pytest.fixture
 def project(client):
-    return client.post("/projects", json={"name": "זומים"}).json()
+    created = client.post("/projects", json={"name": "זומים"}).json()
+    # These tests cover approval going straight to the export, which is what
+    # happens with the B-roll step switched off. The default hand-over to
+    # B-roll (stage 3A) is tested in test_broll.py.
+    response = client.put(f"/projects/{created['id']}/broll/settings", json={"enabled": False})
+    assert response.status_code == 200, response.text
+    return created
 
 
 @pytest.fixture

@@ -205,6 +205,7 @@ export default function ZoomsPanel({ project, onJobSubmitted }: { project: Proje
           ? { kind: 'ok', text: 'Approved. Exporting the zoomed video with its captions…' }
           : { kind: next.kind === 'blocked' ? 'warn' : 'ok', text: next.message },
       )
+      if (next.kind === 'broll') document.querySelector('.broll')?.scrollIntoView({ behavior: 'smooth' })
       onJobSubmitted()
       await refresh()
     }, 'Approving failed.')
@@ -354,6 +355,9 @@ export default function ZoomsPanel({ project, onJobSubmitted }: { project: Proje
             </>
           )}
 
+          {review?.approved && !continuation && status.broll_enabled && (
+            <p className="small hint">Next step: B-roll, below. Approve or skip it there to export.</p>
+          )}
           {review?.approved && (
             <div className="row">
               {continuation && 'export_id' in continuation && continuation.downloadable ? (

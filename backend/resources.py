@@ -24,7 +24,7 @@ RESOURCE_CATALOG_VERSION = 2
 # in the interface must not mark every existing plan outdated.
 # The captions block (selected video, imports, style, grouping) is the captions
 # screen's own state for the same reason.
-FINGERPRINT_EXCLUDED_SETTINGS = frozenset({cutting.SETTINGS_KEY, "captions", "zooms"})
+FINGERPRINT_EXCLUDED_SETTINGS = frozenset({cutting.SETTINGS_KEY, "captions", "zooms", "broll"})
 
 MEDIA_TYPE_VIDEO = "video"
 

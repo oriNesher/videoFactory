@@ -6,26 +6,32 @@
  * render script (frontend/scripts/render-captions.mjs) renders, so preview
  * and export cannot disagree about where, when or how a caption appears.
  *
- * Layers, bottom to top. Later stages (B-roll, zooms, other overlays) add
- * layers here; they do not need a second caption implementation.
- *   1. the video, letterboxed (never cropped or stretched) into the frame;
- *   2. the caption layer.
+ * Layers, bottom to top. Later stages add layers here; they do not need a
+ * second caption implementation.
+ *   1. the video, letterboxed (never cropped or stretched) into the frame —
+ *      the clean or already-zoomed talking head (zooms are rendered into that
+ *      file by FFmpeg beforehand, so nothing here zooms anything);
+ *   2. B-roll (stage 3A), when the props carry any: ../broll/BrollLayer.tsx;
+ *   3. the caption layer, always on top.
  *
- * Audio: the video element's own track is the only audio in the composition.
- * There is no separate <Audio>, so the original sound is present exactly once.
+ * Audio: the video element's own track is the composition's audio, present
+ * exactly once; it keeps playing under every B-roll placement. B-roll assets
+ * are muted unless a placement turns its asset's sound on.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import { AbsoluteFill, continueRender, delayRender, useCurrentFrame, useVideoConfig } from 'remotion'
 import { Video } from '@remotion/media'
+import { BrollLayer } from '../broll/BrollLayer'
 import { fontFamily, loadCaptionFont } from './fonts'
 import { activeIndex, captionFrameRanges, frameToSeconds } from './timing'
 import type { Caption, CaptionStyle, CaptionedVideoProps } from './types'
 
-export function CaptionedVideo({ video, captions, style, direction }: CaptionedVideoProps) {
+export function CaptionedVideo({ video, captions, style, direction, broll }: CaptionedVideoProps) {
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
       <Video src={video.src} objectFit="contain" />
+      {broll && broll.placements.length > 0 && <BrollLayer broll={broll} />}
       <CaptionLayer captions={captions} style={style} direction={direction} />
     </AbsoluteFill>
   )

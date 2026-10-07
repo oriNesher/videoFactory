@@ -83,6 +83,29 @@ def _ask_for_video_file() -> str | None:
 
 
 FILE_DIALOG_TITLE = "Choose a video to caption"
+BROLL_DIALOG_TITLE = "Choose an image or video to add to the B-roll library"
+BROLL_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _ask_for_broll_file() -> str | None:
+    """The file dialog for one image or video. Same threading rules as above."""
+    import tkinter
+    from tkinter import filedialog
+
+    videos = " ".join("*%s" % extension for extension in sorted(storage.VIDEO_EXTENSIONS))
+    images = " ".join("*%s" % extension for extension in BROLL_IMAGE_EXTENSIONS)
+    root = tkinter.Tk()
+    try:
+        root.withdraw()
+        root.attributes("-topmost", True)
+        chosen = filedialog.askopenfilename(
+            title=BROLL_DIALOG_TITLE,
+            filetypes=[("Images and videos", "%s %s" % (images, videos)), ("Images", images), ("Videos", videos)],
+        )
+    finally:
+        root.destroy()
+
+    return chosen or None
 
 
 def choose_directory() -> dict:
@@ -93,6 +116,11 @@ def choose_directory() -> dict:
 def choose_video_file() -> dict:
     """Show the file dialog for one video and report what the user picked."""
     return _show_dialog(_ask_for_video_file, "file")
+
+
+def choose_broll_file() -> dict:
+    """Show the file dialog for one B-roll image or video."""
+    return _show_dialog(_ask_for_broll_file, "file")
 
 
 def _show_dialog(ask, noun: str) -> dict:

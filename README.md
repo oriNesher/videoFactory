@@ -10,14 +10,18 @@ only when configured: an AI editing plan (see
 which sends a video's transcript and timings to Google's Gemini API (see
 [Zooms](#zooms-stage-2b)). Video and audio never leave the computer.
 
-Current state: **stage 2B** — projects, background jobs, structured AI
+Current state: **stage 3A** — projects, background jobs, structured AI
 editing plans, cutting in two modes (**boundary-only trimming**, the default,
 and **full-clip silence removal** with Auto-Editor), **captions** (local
 Hebrew transcription with Whisper, editable caption revisions, a Remotion
-preview, MP4 or SRT export), and now **automatic zooms**: Gemini plans
-punch-in zooms from the transcript, FFmpeg renders them on the clean video,
-you review the real result with the captions on top and approve it. See
-[Zooms](#zooms-stage-2b) and [docs/PROGRESS.md](docs/PROGRESS.md).
+preview, MP4 or SRT export), **automatic zooms** (Gemini plans punch-in
+zooms from the transcript, FFmpeg renders them, you review and approve), and
+now the **B-roll foundation**: a local library of your own images and
+videos, a validated placement plan, full-frame and picture-in-picture
+templates composed between the (zoomed) speaker and the captions, review,
+approval and export. Choosing B-roll automatically is the next stage; for
+now it is placed by hand. See [B-roll](#b-roll-stage-3a) and
+[docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Requirements
 
@@ -153,8 +157,9 @@ file, stage 2B — the same code as the Zooms section). Two cutting capabilities
 rather than one with a mode parameter: a plan's capability id says by itself
 whether pauses inside a clip will be removed. Caption *export* is not a plan
 capability — captions are reviewed and exported in the Captions section — and
-B-roll and audio are still not registered, so a request for them is answered
-with an explanation rather than an invented plan.
+B-roll (placed by hand in the B-roll section, stage 3A) and audio are not
+registered, so a request for them is answered with an explanation rather than
+an invented plan.
 
 **Cutting does not need AI.** The normal flow is the **Cutting** section: set
 the numbers, look at the previews, press **Render clips and merged video**. No
@@ -819,11 +824,13 @@ automatic, in one background job:
    A one-line description of the editing style is shown; the plan, the
    per-interval reasons and the technical checks are under **Plan and
    technical details**.
-5. **Approve and continue.** With captions, this starts the Captions export
-   of the zoomed video (captions over the zoomed picture) and offers the
-   download when it finishes. Without captions, the zoomed video is the
-   finished file. No later module (B-roll, audio) exists yet, so export is
-   the next step.
+5. **Approve and continue.** The next step is **B-roll** (stage 3A): the
+   zoomed video becomes its base video, and B-roll's own approval — or
+   **Skip B-roll** — leads to the export. With the B-roll step switched off
+   (B-roll → *Settings and templates*), approving goes straight to the
+   export as before: with captions, the Captions export of the zoomed video
+   (captions over the zoomed picture); without captions, the zoomed video
+   is the finished file.
 
 There is no plan-approval step before rendering, no transcript to copy and
 no plan to import.
@@ -1040,10 +1047,224 @@ parts:
 - Free-tier data use (above) makes it unsuitable for confidential scripts.
 - No manual zoom editor. If the plan is wrong, change the style setting and
   **Make a new plan**.
-- **Skip** is simply not pressing **Create zooms**: there is no module
-  pipeline yet that a skip would advance.
+- **Skip** is simply not pressing **Create zooms**; the B-roll section can
+  start from the un-zoomed video directly.
 - An input with odd pixel dimensions is padded by one black pixel to even
   (H.264 needs even sizes), as the captions export already does.
+
+## B-roll (stage 3A)
+
+Stage 3A is the **foundation** for B-roll: a reusable library of your own
+images and videos, a validated placement plan, two templates, and one
+composition that draws the speaker's video, the B-roll and the captions for
+both the preview and the export. **Choosing B-roll automatically — which
+asset, where, for how long — is stage 3B and is not implemented.** Until
+then B-roll is placed by hand with one small action, and nothing is ever
+inserted on its own.
+
+Open a project and scroll to **B-roll** (below **Zooms**).
+
+### The library
+
+**Asset library** (inside the B-roll section) is shared by every project in
+the workspace.
+
+- **Import image or video…** opens the machine's file dialog (or **Paste a
+  path instead**). Accepted: PNG, JPEG, WebP images; H.264, VP8, VP9 or AV1
+  video in MP4, MOV, WebM or MKV — screen recordings included. A video in
+  another codec (HEVC, ProRes, MPEG-4 Part 2…) is listed as **Unsupported
+  format** with what to convert it to, because the preview browser and the
+  renderer cannot decode it reliably. Anything FFprobe cannot read at all is
+  refused.
+- **Files are referenced, never copied.** The library stores the absolute
+  path, exactly like project footage; importing reads the file (FFprobe, a
+  fingerprint, one frame for a 320-pixel thumbnail) and writes nothing next
+  to it. Importing the same file — or the same bytes under another path —
+  again returns the existing entry.
+- **Measured automatically:** display width and height (after rotation
+  metadata), aspect ratio and orientation, codec, and for videos duration,
+  frame rate and whether there is an audio track. Plus a content fingerprint.
+- **Your words, optional:** a name (the file name is shown otherwise), a
+  description and tags, under **Details**. Nothing is ever derived from a
+  file name or guessed from the picture.
+- **States:** *File missing* (moved, renamed, deleted — move it back or
+  remove the entry), *File changed* (different bytes at the path — press
+  **Re-measure**; until then it cannot be placed or rendered), *Unsupported
+  format*. **Remove from library** removes the entry, never the file.
+- **Play** previews a video asset in place.
+
+### Placing B-roll (the temporary manual path)
+
+1. **Video.** Choose the base video. The default is the factory's latest
+   approved result: an approved zoomed video, else the newest merged cut
+   video, else the first available video. **Import a video…** adds a video
+   edited elsewhere (the same import as in Captions). Captions and zooms are
+   optional; no AI key is needed.
+2. **Add B-roll.** Pause the preview where the B-roll should start, choose
+   an asset and a template, press **Add at m:ss.ss**. The length is 3 s for
+   an image and up to 4 s for a video, shortened to what the video asset has
+   left, to the end of the base video and to the start of the next B-roll.
+   Starting inside an existing B-roll is refused.
+3. Each placement is listed with ▶ (jump there), its template, **Remove**,
+   and **Adjust** (start, end, the in-point inside a video asset, and the
+   template's settings) — secondary, collapsed controls.
+
+With no placements the section says that automatic planning is not
+implemented yet and offers **Skip B-roll**.
+
+### Templates
+
+| Template | What it does | Settings (default) |
+| --- | --- | --- |
+| `fullframe` — **Full-frame cutaway** | The asset replaces the speaker's picture for the length of the placement; the speaker's audio continues underneath. | `fit`: `contain` (whole asset, black bars where shapes differ, nothing cropped) or `cover` (fills the frame, overflow cropped equally from both sides); `caption_scrim` (`true`: a soft dark gradient on the captions' side); `muted` (`true`) |
+| `pip` — **Picture-in-picture** | The asset in a box in one corner; the speaker stays visible. | `position`: `auto` (the right-hand corner on the opposite half from the captions — top-right with the default caption position), or a fixed corner; `size_percent` 20–60 (`40`, % of the frame width); `margin_percent` 2–10 (`4`, % of the shorter side); `muted` (`true`) |
+
+- **No stretching, ever.** A picture-in-picture box takes the asset's own
+  aspect ratio (its height is capped at 45 % of the frame height; the box
+  then shrinks), so nothing in it is cropped either. Full-frame uses
+  `contain` unless you choose `cover` — screen recordings and images are
+  there to be read.
+- **Simple cuts.** B-roll appears and disappears on a frame; no transitions.
+- **Muted by default.** A B-roll video's own sound is off unless you untick
+  **Mute the asset**.
+- The registry is `backend/broll_templates.py`; the renderer for each
+  template is fixed code in `frontend/src/broll/BrollLayer.tsx`. There is no
+  plugin mechanism.
+
+### The plan
+
+Placements are stored as a versioned **B-roll plan** for exactly one base
+video (its key *and* its content fingerprint):
+
+```json
+{
+  "schema_version": 1, "kind": "video_factory.broll_plan",
+  "plan_id": "3f0c9a1b2d4e", "revision": 2, "parent_revision": 1,
+  "origin": "manual",
+  "base": { "key": "zoom.8a1c…", "digest": "sha256:…", "duration_seconds": 41.2,
+            "fps": 30.0, "width": 1080, "height": 1920, "duration_in_frames": 1236 },
+  "timeline": "Seconds from the first frame of the base video …",
+  "overlap_policy": "reject",
+  "template_catalog_version": 1,
+  "placements": [
+    { "id": "p1a2b3c4d", "asset_id": "e14a20919a7b", "template_id": "pip",
+      "start": 12.4, "end": 16.4, "source_start": 0.5,
+      "settings": { "position": "auto", "size_percent": 40.0, "margin_percent": 4.0, "muted": true } }
+  ]
+}
+```
+
+- **Timeline:** seconds from the first frame of the base video — the edited
+  video, never an original clip. Intervals are half-open `[start, end)`.
+- **Validation** (one function for the button, for whole plans and for the
+  stage 3B planner): the asset exists and is available; the template and
+  every setting are known and in range (unknown keys refused); times are
+  finite numbers; `0 ≤ start`, `end ≤` the video's length (a millisecond of
+  rounding is clamped); at least 0.2 s long; for a video asset
+  `source_start ≥ 0` and `source_start + (end − start) ≤` the asset's
+  length — a short asset is never looped or frozen; for an image
+  `source_start` is `null`.
+- **Overlaps are refused.** One B-roll is on screen at a time; a plan with
+  two overlapping placements is rejected with both time ranges named.
+  Back-to-back placements are fine.
+- **Revisions are immutable** (`rev-000N.json`, exclusive create) and each
+  change names the revision it was made on; a change based on an older
+  revision is refused instead of overwriting.
+- **A changed base video** (re-cut, re-recorded) has a new fingerprint: its
+  old plan is kept, listed as not applied, and never drawn on the new video.
+
+### How it composes with zooms and captions
+
+The composition (`frontend/src/captions/CaptionedVideo.tsx`) has three
+layers, bottom to top:
+
+1. **The speaker's video** — clean or already zoomed. Zooms are rendered into
+   that file by FFmpeg in the Zooms step, so the composition zooms nothing:
+   B-roll and captions can never be zoomed by accident.
+2. **B-roll** — one `<Sequence>` per placement. The speaker's video is never
+   paused, trimmed or restarted underneath it, so when a full-frame cutaway
+   ends the picture shows the speaker exactly as the base video has them at
+   that moment, at that moment's zoom.
+3. **Captions** — the structured caption revision (never a captioned export),
+   at the same size and position as without B-roll. A full-frame cutaway
+   darkens the captions' side of the asset (`caption_scrim`); the
+   picture-in-picture corner defaults to the half without captions.
+
+**Audio:** the speaker's track is the only sound by default and plays exactly
+once, continuously.
+
+**Frames.** The project's frame-rate policy is unchanged (the base video's
+composition rate, as in Captions). A placement `[start, end)` is on screen on
+frames `ceil(start·fps)` … `ceil(end·fps) − 1` — the captions' rule, from
+absolute seconds, no accumulated drift; back-to-back placements meet on one
+frame boundary. A video asset's in-point is rounded to the nearest
+composition frame, `round(source_start·fps)`, and then advances one asset
+second per second.
+
+### Review, approval and export
+
+- **The preview is the export.** The backend composes the props — the
+  caption revision and style, every placement with its settings resolved
+  (`auto` already turned into a corner) — and the browser only adds media
+  URLs. The export renders the same props.
+- **Approve and continue** records a decision naming a digest of exactly
+  what was composed: the base video's fingerprint, the plan revision, every
+  asset's fingerprint, the caption revision and style revision, and the
+  resolved props. It then starts the **B-roll export** (MP4, H.264 + AAC, as
+  the captions export), whose download appears in the section. Any later
+  change to any of those marks the approval outdated; nothing is re-rendered
+  for that.
+- **Skip B-roll** records a skip the same way and continues to the existing
+  export: the captioned export of the base video when it has captions, or
+  the base video itself as the finished file.
+- **From Zooms.** With B-roll enabled (the default; **Settings and
+  templates** has the switch), approving a zoom result no longer exports
+  directly: the zoomed video becomes B-roll's base and the next step is
+  here. Switched off, approving zooms exports as before.
+- **Immutable snapshots.** An export freezes the base (path, fingerprint,
+  metadata), each asset (path, fingerprint), the plan revision, the caption
+  reference, the resolved props and the encoder settings into its job.
+  Editing the plan, captions or library while it runs — or retrying it
+  later — renders exactly that snapshot. Every file is fingerprinted again
+  before and after rendering; a change discards the result.
+- **Jobs.** Exports run in the background queue with progress, **Cancel**
+  (kills the render's process tree and deletes the partial file) and
+  **Retry** (a new export of the same snapshot). Output is written to
+  `.partial.mp4` and renamed only after FFprobe verification; a cancelled or
+  failed export never appears as a result.
+- **Nothing upstream reruns.** B-roll reads the existing transcript, caption
+  revision and zoom output; it never transcribes or zooms.
+
+### The catalog for stage 3B
+
+`GET /broll/catalog` (and `GET /projects/<id>/broll/catalog?input_key=…`,
+which adds the base video's length and frame rate) returns what a future
+planner will be given: the templates with their setting schemas and
+defaults, the placement constraints, and every asset as `asset_id`, media
+type, usability, measured size / aspect ratio / orientation / duration /
+audio, and the user's own label, description and tags. **No paths and no
+file names.** `semantic_description` is `"none"` unless you wrote a
+description, and the catalog states that technical metadata says nothing
+about content. A planner will submit placements through
+`PUT /projects/<id>/broll/inputs/<key>/plan` (`origin: "planner"`), which
+uses the same validation, review and rendering path as the manual one.
+
+### Known limitations (B-roll)
+
+- **No automatic B-roll.** Stage 3B.
+- **Manual placement is deliberately minimal:** no timeline, drag and drop,
+  keyframes, waveform, transitions or motion graphics.
+- **One B-roll at a time**; no stacking.
+- **Referenced files can change under a running export.** Fingerprints are
+  checked before and after the render, so a change discards the result, but
+  a file is read live while rendering rather than copied.
+- **EXIF-rotated photos** are measured from FFprobe's rotation metadata,
+  which not every JPEG exposes; a sideways photo then shows with black bars
+  (never stretched). Save it upright if that happens.
+- **A plan belongs to one exact video.** Re-cutting or re-zooming makes a new
+  base video; place B-roll again (plans are not remapped).
+- **The library is per workspace**, not per project, and its paths are
+  machine-specific like footage paths.
 
 ## Subtitles with Whisper (per cutting run, older)
 
@@ -1135,6 +1356,22 @@ from a stored plan, one repair then failure, quota handling, cancellation
 lineage, and a **real Remotion export** proving captions keep their size and
 position over the zoomed video. No test calls Gemini.
 
+`backend\tests\test_broll.py` covers stage 3A: library import and
+measured metadata (references, not copies; no paths or file names in the
+catalog; descriptions only from the user), missing / changed / unsupported
+files, every placement rule (bounds, finite times, minimum length, video
+source ranges, image in-points, unknown templates and settings, overlaps),
+the add-at-playhead clamping, immutable revisions and conflicts, reopening
+after a restart, the planner path, resolved props, a changed base video,
+approval and skip naming exactly what was composed, the hand-over from
+zooms — and two **real Remotion renders**: a zoomed 360×640 video with
+Hebrew captions, a full-frame image and a picture-in-picture video, checked
+frame by frame at every placement boundary, for size and aspect, for
+captions at the same place, and by its audio (speech once, at the same
+level and time; the asset's own tone muted); and a cancelled export that
+rendered its snapshot. `npm.cmd test` also runs `frontend\tests\broll.test.ts`
+(placement frames, in-points, picture-in-picture geometry).
+
 The Python tests use a throwaway workspace and a stubbed provider: they never
 touch `workspace\`, your footage, or the network.
 
@@ -1172,6 +1409,10 @@ tools are not on `PATH`, those tests skip rather than fail.
 | Caption exports (MP4, SRT) | `workspace\projects\<project-id>\exports\captions\<export-id>\` |
 | Zoom plans (immutable) | `…\intermediates\zooms\plans\<plan-id>.json` |
 | Zoom runs | `…\intermediates\zooms\runs\<run-id>\` (`manifest.json`, `filter.txt`, `zoomed.mp4`, `logs\`, `approval.json`) |
+| B-roll library (all projects) | `workspace\library\broll\library.json`, `…\thumbnails\` (the files themselves stay where they are) |
+| B-roll plans (immutable revisions) | `…\intermediates\broll\plans\<plan-id>\rev-000N.json` |
+| B-roll approve / skip decisions | `…\intermediates\broll\decisions\<video-key>.json` |
+| B-roll exports | `workspace\projects\<project-id>\exports\broll\<export-id>\` (`export.json`, `snapshot.json`, `<name>.broll.mp4`, `logs\`) |
 | Remotion render bundle | `workspace\cache\remotion-bundles\` |
 | Whisper models | `%USERPROFILE%\.cache\huggingface\hub` |
 | Exports | `workspace\projects\<project-id>\exports\` |
@@ -1405,9 +1646,13 @@ caption touching the frame edge, portrait and landscape videos looking alike.
     details**: the reasons, the frame counts, the adjustments.
 40. Edit a caption in **Captions** and save. Back in **Zooms**, the player
     shows the edited caption, and nothing re-rendered.
-41. **Approve and continue.** The captioned export starts; when it finishes,
-    **Download the captioned, zoomed video** and play it in a normal player.
-    Save a caption change afterwards: the approval shows as outdated.
+41. **Approve and continue.** The B-roll section takes over with the zoomed
+    video; press **Skip B-roll** there (or add B-roll, step 46). The
+    captioned export starts; when it finishes, download it and play it in a
+    normal player. (With the B-roll step switched off, approving zooms
+    starts that export directly and offers **Download the captioned, zoomed
+    video**.) Save a caption change afterwards: the approval shows as
+    outdated.
 42. In **Captions**, the zoomed video appears under *Zoomed video*, with the
     clean video's captions and a note explaining why.
 43. Restart both terminals and reopen the project: the result, its approval
@@ -1417,3 +1662,48 @@ caption touching the frame edge, portrait and landscape videos looking alike.
 **Editorial checklist (only real footage can answer):** does the rhythm feel
 natural, are hooks and calls to action emphasised, does anything change in
 the middle of a word, is 120% too tight for this framing?
+
+### B-roll (stage 3A)
+
+**Walkthrough with one talking-head video, one image and one video B-roll
+asset** (a screen recording is ideal):
+
+44. Open a project with a merged cut video (zoomed and captioned or not).
+    In **Zooms**, **Approve and continue**: the message says to continue in
+    B-roll, and the B-roll section now shows the zoomed video. (Without
+    zooms, choose the merged video in B-roll's own list, or **Import a
+    video…**.)
+45. Open **Asset library**, **Import image or video…** and pick the image;
+    again for the screen recording. Each card shows a thumbnail, its size,
+    and for the video its length and whether it has audio. Press **Play**
+    on the video. Under **Details** add a description to one of them.
+    Check in Explorer that nothing was copied next to your files.
+46. The section says automatic B-roll planning is not implemented yet.
+    Pause the preview at a sentence that suits the image, choose the image
+    and **Full-frame cutaway**, **Add at m:ss**. Scrub through: the image
+    covers the speaker for 3 s, the speech goes on, captions stay readable on
+    a darker band, and when it ends the speaker is back at the same zoom as
+    before.
+47. Pause later, choose the screen recording and **Picture-in-picture**,
+    **Add**. It appears in the top-right corner, in its own shape, muted,
+    for up to 4 s. Under **Adjust** change *From the asset at* to skip its
+    first seconds, or the corner; the preview follows.
+48. Try to add something inside an existing B-roll — refused with the times.
+    **Remove** a placement and add it back.
+49. **Approve and continue.** The export runs in Background jobs (Cancel
+    works); when it finishes, **Play** and **Download the finished video**.
+    Check lip sync, that speech is never doubled or interrupted, that no
+    B-roll audio is heard, and that captions sit in the same place
+    throughout.
+50. Rename the image in Explorer and reopen the project: the card says
+    *File missing*, the placement says why it cannot be used, and the
+    approval is outdated. Rename it back: everything is as approved again.
+51. On another video with no B-roll, press **Skip B-roll**: its captioned
+    export (or the video itself, without captions) is offered.
+52. Restart both terminals: the library, the plan, the decision and the
+    export are all still there.
+
+**Visual checklist:** nothing stretched; a screen recording readable in
+full-frame (`contain`) — switch to `cover` only if cropping is acceptable;
+the picture-in-picture box not covering the face for your framing (change
+the corner or size if it does); captions readable over bright B-roll.

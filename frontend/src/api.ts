@@ -1,5 +1,11 @@
 import type {
   AddDirectoryResult,
+  BrollDecision,
+  BrollInputState,
+  BrollLibraryAsset,
+  BrollNext,
+  BrollPlan,
+  BrollStatus,
   CaptionCatalog,
   CaptionCheck,
   CaptionGrouping,
@@ -609,4 +615,107 @@ export function approveZoomRun(projectId: string, runId: string, outputDigest: s
 /** The actual FFmpeg output, by run id. */
 export function zoomVideoUrl(projectId: string, runId: string, download = false) {
   return `${API_BASE}${zoomsBase(projectId)}/runs/${runId}/video${download ? '?download=true' : ''}`
+}
+
+// --- B-roll (stage 3A) ----------------------------------------------------------
+
+/** The workspace-wide asset library, shared by every project. */
+export function getBrollLibrary() {
+  return request<{ assets: BrollLibraryAsset[]; storage_note: string }>(`/broll/library`)
+}
+
+/** No path opens the machine's file dialog on the backend. */
+export function importBrollAsset(path: string | null) {
+  return request<{ cancelled: boolean; asset: BrollLibraryAsset | null; duplicate: boolean }>(`/broll/library/imports`, {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
+export function updateBrollAsset(
+  assetId: string,
+  changes: { display_name?: string | null; description?: string | null; tags?: string[] },
+) {
+  return request<BrollLibraryAsset>(`/broll/library/${assetId}`, { method: 'PATCH', body: JSON.stringify(changes) })
+}
+
+export function remeasureBrollAsset(assetId: string) {
+  return request<BrollLibraryAsset>(`/broll/library/${assetId}/remeasure`, { method: 'POST' })
+}
+
+export function removeBrollAsset(assetId: string) {
+  return request<{ removed: string }>(`/broll/library/${assetId}`, { method: 'DELETE' })
+}
+
+/** Versioned by fingerprint so a re-measured file is never served from cache. */
+export function brollAssetMediaUrl(assetId: string, digest: string) {
+  return `${API_BASE}/broll/library/${assetId}/media?v=${digest.slice(7, 19)}`
+}
+
+export function brollAssetThumbnailUrl(asset: BrollLibraryAsset) {
+  return `${API_BASE}/broll/library/${asset.id}/thumbnail?v=${asset.fingerprint.digest.slice(7, 19)}`
+}
+
+const brollBase = (projectId: string) => `/projects/${projectId}/broll`
+
+export function getBrollStatus(projectId: string) {
+  return request<BrollStatus>(`${brollBase(projectId)}/status`)
+}
+
+export function saveBrollSettings(projectId: string, changes: { enabled?: boolean; selected_input?: string }) {
+  return request<BrollStatus['settings']>(`${brollBase(projectId)}/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(changes),
+  })
+}
+
+/** State only: reading never renders anything. */
+export function getBrollInput(projectId: string, inputKey: string) {
+  return request<BrollInputState>(`${brollBase(projectId)}/inputs/${inputKey}`)
+}
+
+export function addBrollPlacement(
+  projectId: string,
+  inputKey: string,
+  body: { asset_id: string; at_seconds: number; template_id?: string; base_revision: number },
+) {
+  return request<BrollPlan>(`${brollBase(projectId)}/inputs/${inputKey}/placements`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateBrollPlacement(
+  projectId: string,
+  inputKey: string,
+  placementId: string,
+  changes: Record<string, unknown>,
+  baseRevision: number,
+) {
+  return request<BrollPlan>(`${brollBase(projectId)}/inputs/${inputKey}/placements/${placementId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ changes, base_revision: baseRevision }),
+  })
+}
+
+export function removeBrollPlacement(projectId: string, inputKey: string, placementId: string, baseRevision: number) {
+  return request<BrollPlan>(
+    `${brollBase(projectId)}/inputs/${inputKey}/placements/${placementId}?base_revision=${baseRevision}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function decideBroll(projectId: string, inputKey: string, decision: 'approve' | 'skip', compositionDigest: string) {
+  return request<{ decision: BrollDecision; next: BrollNext }>(`${brollBase(projectId)}/inputs/${inputKey}/${decision}`, {
+    method: 'POST',
+    body: JSON.stringify({ composition_digest: compositionDigest }),
+  })
+}
+
+export function brollExportUrl(projectId: string, exportId: string, download = false) {
+  return `${API_BASE}${brollBase(projectId)}/exports/${exportId}/file${download ? '?download=true' : ''}`
+}
+
+export function brollBaseVideoUrl(projectId: string, inputKey: string, download = false) {
+  return `${API_BASE}${brollBase(projectId)}/inputs/${inputKey}/video${download ? '?download=true' : ''}`
 }

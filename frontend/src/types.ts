@@ -994,6 +994,8 @@ export type ZoomStatus = {
   renderer: { version: string; method: string; origin: string }
   caption_renderer: { ready: boolean; problems: string[] }
   settings: { preference: string; selected_input: string | null }
+  /** Approving continues to the B-roll step instead of exporting. */
+  broll_enabled: boolean
   inputs: ZoomInputListing[]
   selected_input: string | null
 }
@@ -1097,4 +1099,146 @@ export type ZoomApproveResult = {
     | { kind: 'final'; message: string }
     | { kind: 'blocked'; message: string }
     | { kind: 'caption_export'; export: unknown; job: Job | null }
+    | { kind: 'broll'; input_key: string; message: string }
+}
+
+// --- B-roll (stage 3A) ---------------------------------------------------------
+
+export type BrollAssetStatus = 'available' | 'missing' | 'changed' | 'unsupported'
+
+export type BrollLibraryAsset = {
+  id: string
+  media_type: 'image' | 'video'
+  filename: string
+  display_name: string
+  display_name_source: 'user' | 'filename'
+  /** Only ever what the user typed. */
+  description: string | null
+  tags: string[]
+  measured: {
+    width: number
+    height: number
+    aspect_ratio: number
+    orientation: 'landscape' | 'portrait' | 'square'
+    duration_seconds: number | null
+    fps: number | null
+    has_audio: boolean
+    codec: string
+    supported: boolean
+    unsupported_reason: string | null
+  }
+  fingerprint: { digest: string }
+  imported_at: string | null
+  storage: 'referenced'
+  has_thumbnail: boolean
+  status: BrollAssetStatus
+  status_reason: string | null
+}
+
+export type BrollTemplateSetting = {
+  type: 'choice' | 'boolean' | 'number'
+  label: string
+  description: string
+  default: unknown
+  choices?: string[]
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+}
+
+export type BrollTemplate = {
+  id: 'fullframe' | 'pip'
+  version: number
+  label: string
+  description: string
+  settings: Record<string, BrollTemplateSetting>
+  defaults: Record<string, unknown>
+}
+
+export type BrollStatus = {
+  settings: { enabled: boolean; selected_input: string | null }
+  inputs: CaptionInputListing[]
+  selected_input: string | null
+  templates: BrollTemplate[]
+  default_template: string
+  constraints: { min_placement_seconds: number; overlap_rule: string; timeline: string }
+  renderer: { ready: boolean; problems: string[] }
+}
+
+export type BrollStoredPlacement = {
+  id: string
+  asset_id: string
+  template_id: 'fullframe' | 'pip'
+  start: number
+  end: number
+  source_start: number | null
+  settings: Record<string, unknown>
+}
+
+export type BrollPlan = {
+  plan_id: string
+  revision: number
+  created_at: string
+  origin: 'manual' | 'planner'
+  note: string | null
+  placements: BrollStoredPlacement[]
+}
+
+export type BrollIssue = { index: number | null; placement_id: string | null; message: string }
+
+export type BrollDecision = {
+  decision: 'approved' | 'skipped'
+  decided_at: string
+  composition_digest: string
+  placement_count: number
+}
+
+export type BrollExportRecord = {
+  export_id: string
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
+  created_at: string
+  finished_at: string | null
+  error: string | null
+  downloadable: boolean
+  composition_digest: string
+  placement_count: number
+  output: { filename: string; size_bytes: number } | null
+  verification: { duration_seconds: number; width: number; height: number } | null
+}
+
+export type BrollNext =
+  | { kind: 'broll_export'; export: BrollExportRecord | null; job: ZoomJobSummary | null }
+  | { kind: 'caption_export'; export: CaptionExport | null; job: ZoomJobSummary | null }
+  | { kind: 'final'; message: string }
+  | { kind: 'blocked'; message: string }
+
+export type BrollComposedProps = Omit<import('./captions/types').CaptionedVideoProps, 'video'> & {
+  video: Omit<import('./captions/types').CompositionVideo, 'src'>
+}
+
+export type BrollInputState = {
+  input: CaptionInputDetail
+  available: boolean
+  unavailable_reason: string | null
+  plan: BrollPlan | null
+  stale_plans: { plan_id: string; revision: number; created_at: string; placement_count: number }[]
+  issues: BrollIssue[]
+  assets: Record<string, BrollLibraryAsset>
+  /** The composition's props without media URLs: exactly what the export renders. */
+  props: BrollComposedProps | null
+  composition_digest: string | null
+  captions: { transcript_id: string; revision: number; style_revision: number; caption_count: number } | null
+  review: {
+    decision: BrollDecision | null
+    approved: boolean
+    skipped: boolean
+    outdated_reason: string | null
+    can_approve: boolean
+  } | null
+  continuation: BrollNext | null
+  exports: BrollExportRecord[]
+  active_job: ZoomJobSummary | null
+  last_job: ZoomJobSummary | null
+  planner: { implemented: boolean; message: string }
 }

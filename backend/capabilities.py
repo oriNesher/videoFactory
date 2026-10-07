@@ -309,7 +309,8 @@ NOT_YET_SUPPORTED = [
     "Caption export through a plan (captions are reviewed, styled and exported "
     "in the Captions section)",
     "Animated zooms, face tracking and other effects",
-    "B-roll and other overlay layers",
+    "B-roll through a plan, and choosing B-roll automatically (B-roll is placed by "
+    "hand, reviewed and exported in the B-roll section)",
     "Background music and sound effects",
     "Final export and recording (OBS)",
 ]

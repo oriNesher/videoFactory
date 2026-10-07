@@ -8,6 +8,8 @@
  * backend's JSON, hence snake_case.
  */
 
+import type { BrollProps } from '../broll/types'
+
 export type CaptionWord = {
   text: string
   start: number
@@ -71,6 +73,8 @@ export type CaptionedVideoProps = {
   captions: Caption[]
   style: CaptionStyle
   direction: 'rtl' | 'ltr'
+  /** Stage 3A: B-roll between the video and the captions. Absent = none. */
+  broll?: BrollProps | null
 }
 
 export const COMPOSITION_ID = 'CaptionedVideo'

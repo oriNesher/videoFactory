@@ -15,10 +15,15 @@
 //     "bundle_cache_dir": "C:\\…\\workspace\\cache\\remotion-bundles",
 //     "crf": 18, "x264_preset": "medium", "concurrency": null }
 //
-// Media access. The composition needs a URL for the video. This script serves
-// exactly one file — the snapshot's input — on 127.0.0.1, on a random port,
-// under a random token, for as long as the render runs. Nothing else on disk
-// is reachable through it, and it is gone when the process exits.
+// B-roll exports (backend/broll_jobs.py) add
+//   "assets": [{ "id": "<library asset id>", "path": "C:\…\screen.mp4" }]
+// and props.broll.placements[].asset.id names which of them each placement shows.
+//
+// Media access. The composition needs a URL for the video (and for each B-roll
+// asset). This script serves exactly the snapshot's files — the input and the
+// listed assets — on 127.0.0.1, on a random port, under a random token, for as
+// long as the render runs. Nothing else on disk is reachable through it, and it
+// is gone when the process exits.
 //
 // Protocol. Lines on stdout starting with "@@" are JSON events for the backend;
 // everything else (Remotion's own logs) only goes to the log file.
@@ -48,6 +53,7 @@ const ENTRY = path.join(FRONTEND, 'src', 'remotion', 'index.ts')
 const BUNDLE_INPUTS = [
   path.join(FRONTEND, 'src', 'remotion'),
   path.join(FRONTEND, 'src', 'captions'),
+  path.join(FRONTEND, 'src', 'broll'),
   path.join(FRONTEND, 'package-lock.json'),
 ]
 const COMPOSITION_ID = 'CaptionedVideo'
@@ -146,12 +152,26 @@ async function ensureHeadlessBrowser(allowDownload) {
   })
 }
 
-// --- serving the one input file -------------------------------------------------
+// --- serving the snapshot's files -------------------------------------------------
 
-function serveSingleFile(filePath) {
+const CONTENT_TYPES = {
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+}
+
+// `files` maps a name to an absolute path. Each is served at
+// /<token>/<name><extension>; nothing else answers.
+function serveFiles(files) {
   const token = randomBytes(16).toString('hex')
-  const route = `/${token}/input${path.extname(filePath).toLowerCase() || '.mp4'}`
-  const size = statSync(filePath).size
+  const routes = new Map()
+  const urls = {}
+  for (const [name, filePath] of Object.entries(files)) {
+    const extension = path.extname(filePath).toLowerCase() || '.mp4'
+    const route = `/${token}/${name}${extension}`
+    routes.set(route, { filePath, size: statSync(filePath).size, type: CONTENT_TYPES[extension] ?? 'application/octet-stream' })
+    urls[name] = route
+  }
 
   const server = createServer((request, response) => {
     // The render page is served from Remotion's own local server on another
@@ -165,14 +185,16 @@ function serveSingleFile(filePath) {
       return
     }
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-    if (url.pathname !== route || (request.method !== 'GET' && request.method !== 'HEAD')) {
+    const file = routes.get(url.pathname)
+    if (!file || (request.method !== 'GET' && request.method !== 'HEAD')) {
       response.writeHead(404)
       response.end()
       return
     }
+    const { filePath, size } = file
 
     response.setHeader('Accept-Ranges', 'bytes')
-    response.setHeader('Content-Type', 'video/mp4')
+    response.setHeader('Content-Type', file.type)
     const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range ?? '')
     let start = 0
     let end = size - 1
@@ -208,7 +230,10 @@ function serveSingleFile(filePath) {
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address()
-      resolve({ server, url: `http://127.0.0.1:${port}${route}` })
+      const absolute = Object.fromEntries(
+        Object.entries(urls).map(([name, route]) => [name, `http://127.0.0.1:${port}${route}`]),
+      )
+      resolve({ server, urls: absolute })
     })
   })
 }
@@ -223,10 +248,28 @@ async function render(jobPath) {
   const serveUrl = await ensureBundle(job.bundle_cache_dir)
   await ensureHeadlessBrowser(false)
 
-  const { server, url } = await serveSingleFile(job.input_path)
+  const assets = job.assets ?? []
+  for (const asset of assets) {
+    if (!/^[0-9a-f]{12}$/.test(asset.id)) throw new Error(`Invalid asset id: ${asset.id}`)
+    if (!existsSync(asset.path)) throw new Error(`A B-roll file is missing: ${asset.path}`)
+  }
+  const { server, urls } = await serveFiles({
+    input: job.input_path,
+    ...Object.fromEntries(assets.map((asset) => [`asset-${asset.id}`, asset.path])),
+  })
   try {
     const { renderMedia, selectComposition } = await import('@remotion/renderer')
-    const inputProps = { ...job.props, video: { ...job.props.video, src: url } }
+    const inputProps = { ...job.props, video: { ...job.props.video, src: urls.input } }
+    if (job.props.broll) {
+      inputProps.broll = {
+        ...job.props.broll,
+        placements: job.props.broll.placements.map((placement) => {
+          const src = urls[`asset-${placement.asset.id}`]
+          if (!src) throw new Error(`Placement ${placement.id} names an asset that is not in the snapshot.`)
+          return { ...placement, asset: { ...placement.asset, src } }
+        }),
+      }
+    }
 
     emit({ event: 'stage', stage: 'composition' })
     const composition = await selectComposition({

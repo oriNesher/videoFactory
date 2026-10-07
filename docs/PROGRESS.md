@@ -1365,3 +1365,244 @@ Cut takes → **Zooms**: the merged video is preselected → **Create zooms**
 (transcribes if needed, plans with Gemini, renders, verifies) → watch the
 real result with your captions on top, read *Style applied* → **Approve and
 continue** → the captioned, zoomed MP4 is exported → **Download**.
+
+## Stage 3A — B-roll asset library and composition foundation
+
+Status: complete for the foundation; automatic B-roll is stage 3B.
+
+### What I found first
+
+- Still **no CLAUDE.md, no PRODUCT_PRINCIPLES.md and no roadmap document**
+  in the repository. The scope below follows the stage brief; the roadmap
+  is now kept at the end of this file.
+- "Factory orchestration" is the chain built in 2B: Zooms → **Approve and
+  continue** → the captions export. There is no general module pipeline;
+  B-roll was slotted into that chain (see Decisions) rather than inventing
+  one.
+- The 2A Remotion composition (`CaptionedVideo`) already rendered both the
+  preview and the export, the render script served exactly one file, and
+  every input had a key + content fingerprint (`caption_inputs`). Zoomed
+  videos are FFmpeg outputs with timing lineage to their clean parent.
+- The renderer was prepared on this machine and the existing suite passed:
+  **424 passed** before any change.
+
+### What was built
+
+**Backend:**
+
+| File | Role |
+| --- | --- |
+| `broll_library.py` | New. Workspace-wide library: import (path or dialog), measured metadata, fingerprints, thumbnails, derived status (available / missing / changed / unsupported), user details, re-measure, remove, the model-facing catalog entry |
+| `broll_templates.py` | New. The two-template registry: settings schemas, defaults, validation, `auto` resolution |
+| `broll.py` | New. Plans (immutable revisions per base video + fingerprint), placement validation, add / update / remove, composition props and digest, approve / skip decisions and their staleness, constraints and the stage 3B catalog |
+| `broll_jobs.py` | New. The `broll_export` job: immutable snapshot, fingerprints checked before and after, shared Remotion render, FFprobe verification |
+| `api_broll.py` | New. `/broll/...` (library, catalog) and `/projects/{id}/broll/...` |
+| `caption_jobs.py` | The Remotion process loop extracted into `render_composition`, used by both exports (behaviour unchanged) |
+| `api_zooms.py` | Approval hands over to B-roll when the step is enabled; `broll_enabled` in the status |
+| `folders.py` | An image-or-video file dialog |
+| `resources.py` | `settings.broll` excluded from the plan fingerprint |
+| `capabilities.py` | The "not yet supported" text now says B-roll is manual, not a plan capability (catalog version unchanged: text only) |
+| `models.py`, `main.py` | Request bodies, routers, job registration |
+| `tests/test_broll.py` | New. 33 tests |
+| `tests/test_zooms.py` | Its project fixture switches the B-roll step off, because those tests cover approval → export directly (see Decisions). No assertion changed |
+
+**Frontend:** `src/broll/` (`types.ts`, `layout.ts`, `BrollLayer.tsx`) joins
+the shared composition; `CaptionedVideo.tsx` draws video → B-roll →
+captions; `BrollPanel.tsx`, `BrollLibrary.tsx`, `brollFormat.ts`, API calls,
+types and CSS; `ZoomsPanel.tsx` reacts to the hand-over;
+`scripts/render-captions.mjs` serves B-roll assets beside the input and
+bundles `src/broll`; `tests/broll.test.ts`. No new dependency.
+
+Endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/broll/library` | Library entries with derived status (no paths) |
+| `POST` | `/broll/library/imports` | Import a file (dialog when no path) |
+| `PATCH` | `/broll/library/{asset}` | Name, description, tags — nothing measured |
+| `POST` | `/broll/library/{asset}/remeasure` | Measure a changed file again |
+| `DELETE` | `/broll/library/{asset}` | Remove the entry; the file is untouched |
+| `GET` | `/broll/library/{asset}/media`, `/thumbnail` | The file (Range) and its thumbnail, by id |
+| `GET` | `/broll/catalog` | Templates, constraints, assets for a planner — no paths, no file names |
+| `GET` | `/projects/{id}/broll/status` | Settings, base videos, default, templates, renderer |
+| `PUT` | `/projects/{id}/broll/settings` | Enabled flag, selected base video |
+| `GET` | `/projects/{id}/broll/catalog?input_key=` | The catalog plus the base video's length and rate |
+| `GET` | `/projects/{id}/broll/inputs/{key}` | Plan, issues, composed props + digest, review, continuation, exports |
+| `POST` | `/projects/{id}/broll/inputs/{key}/placements` | Add at the playhead |
+| `PATCH`/`DELETE` | `/projects/{id}/broll/inputs/{key}/placements/{p}` | Change / remove one placement |
+| `PUT` | `/projects/{id}/broll/inputs/{key}/plan` | Save a whole plan (the stage 3B path) |
+| `POST` | `/projects/{id}/broll/inputs/{key}/validate` | Check placements; writes nothing |
+| `POST` | `/projects/{id}/broll/inputs/{key}/approve`, `/skip` | Decide on exactly the reviewed composition, then continue |
+| `GET` | `/projects/{id}/broll/inputs/{key}/video` | The base video (the result of a skip without captions) |
+| `GET` | `/projects/{id}/broll/exports`, `/exports/{e}/file` | Export history, play / download |
+
+### Decisions
+
+**The library is workspace-wide and references files.** Assets are meant to
+be reused across videos, so the library is one versioned JSON file under
+`workspace\library\broll\`, outside any project, written with the same
+atomic discipline. Files are referenced by absolute path, never copied —
+the footage rule — so a 2 GB screen recording costs nothing to import.
+Fingerprints (`caption_inputs.fingerprint`, cached by size + mtime) make
+"moved" and "edited" explicit states instead of silent breakage; a changed
+file is blocked until **Re-measure** so its new length cannot silently
+violate a placement. Duplicate imports (same path or same bytes) return the
+existing entry.
+
+**Measured vs. said.** `measured` comes only from FFprobe. `description` and
+`tags` only from the user. The model-facing catalog omits paths *and* file
+names (a file name is not a description and may be private) and marks
+`semantic_description: "none"` with a note that technical metadata says
+nothing about content.
+
+**Unsupported means the browser, not FFprobe.** The preview is Chrome and
+so is Remotion's renderer; HEVC, ProRes and MPEG-4 Part 2 are listed with a
+conversion hint rather than failing mid-render.
+
+**A plan belongs to exact bytes.** Plans are keyed by base input key *and*
+fingerprint, so a re-cut or re-recorded video never inherits placements
+timed for different content; the old plan is listed as not applied. The
+timeline is the base video's own seconds — for a zoomed video identical to
+its clean parent's, frame for frame.
+
+**Overlaps are rejected, not layered.** "One at a time" is enforced by the
+validator for every source of placements; adding at the playhead clamps the
+default length to the next placement so the button itself never creates a
+conflict.
+
+**No looping, no freezing.** A video placement needs
+`source_start + duration ≤ asset length`; the add action clamps instead of
+padding.
+
+**The backend composes; the browser only adds URLs.** `broll.compose`
+produces the full props (caption revision and style, placements with
+`auto` resolved to a corner, the caption band) and a digest over the props,
+base and asset fingerprints, plan revision and caption reference. The
+review player and the export render those identical props — the real-render
+test asserts the export's snapshot equals what the review screen received.
+Approval and skip store that digest, so any change anywhere outdates them,
+with a reason.
+
+**Composition order and zooms.** Zooms stay an FFmpeg pre-render of the
+talking-head file (2B). B-roll is a layer above it and captions above that,
+so neither can be zoomed, and the base video is never paused or restarted:
+the end of a full-frame cutaway simply uncovers the speaker at that frame's
+framing. B-roll audio is muted by default; the base video's track is the
+only sound.
+
+**Where B-roll sits in the factory.** Approving zooms now continues to
+B-roll (the zoomed file becomes the base), and B-roll's approve or skip
+continues to the export that zooms used to start: the B-roll export, or
+the captions export / the file itself on skip. The step can be switched off
+per project (`settings.broll.enabled`); then approving zooms exports exactly
+as in 2B. The 2B tests run with it off, because they test that direct path;
+the hand-over is tested in `test_broll.py`.
+
+**One render path.** The B-roll export uses the captions export's render
+script, composition, encoder settings, progress, cancellation and FFprobe
+checks (`caption_jobs.render_composition`, extracted from the captions
+export without changing it). The script now serves the snapshot's asset
+files beside the input — still one random port and token, nothing else
+reachable.
+
+**Templates are a small registry, not a framework.** Two ids, a schema per
+setting, defaults, and fixed renderers. PiP boxes take the asset's aspect
+ratio (capped at 45 % of the frame height), so `contain` fills them
+exactly; full-frame defaults to `contain` for readability, `cover` is an
+explicit, documented crop.
+
+### Checks performed
+
+Automated, on this machine:
+
+- `.venv\Scripts\python.exe -m pytest backend\tests -q` → **457 passed** (424 existing + 33 new).
+  `test_broll.py` adds 33 tests, two of them real Remotion renders.
+- `npm.cmd test` → 11 passed (6 existing + 5 B-roll: placement frames,
+  back-to-back boundaries, in-point rounding, PiP geometry and the height
+  cap).
+- `npm.cmd run build` → succeeded (the existing >500 kB chunk warning).
+- `npm.cmd run lint` → nine warnings: the seven pre-existing
+  `set-state-in-effect` ones and two of the same mount-time fetch pattern
+  in `BrollPanel.tsx`.
+
+Real media (generated fixtures; the user's library and `workspace\` were
+not touched):
+
+- **Composition render** (`test_a_real_export_composes_…`): a 360×640,
+  25 fps, 4 s grid with a tone at 1.0–1.5 s; transcribed by the stand-in
+  Whisper into Hebrew captions; zoomed to 120 % from 1.0 s; a red 16:9 PNG
+  full-frame at 0.6–1.4 s and a 4:3 H.264 clip (blue 0–0.5 s, then lime,
+  with a loud 300 Hz tone) picture-in-picture at 2.0–3.2 s from a 0.5 s
+  in-point. FFprobe: one H.264 and one AAC stream, 360×640, 100 frames,
+  4.0 s. Frame 14 equals the captions-only export of the zoomed video;
+  frames 15 and 34 are the first and last with the image, which is 202–203
+  rows tall (letterboxed, *not* zoomed — 243 would mean zoomed); frame 35
+  is the zoomed speaker again (45.5 dB from the reference, 9.5 dB from the
+  un-zoomed source). Frames 50–79 carry a 144×108 lime box top-right
+  (the asset's 4:3, 40 % of the width, lime = the in-point took effect);
+  frames 49 and 80 equal the reference there. Captions: identical to the
+  reference under the PiP (PSNR > 35), and the same text pixels over the
+  full-frame image. Audio: tone RMS within ±1 dB of the source, onset
+  within 30 ms, no 300 Hz tone during the PiP (RMS < 0.003). No new
+  transcription, transcript or zoom run.
+- Frames 20, 35 and 55 of that export were looked at: the red image
+  letterboxed with the darkening band and the Hebrew caption over the black
+  bar; the zoomed grid with its caption; the lime picture-in-picture
+  rounded box in the top-right corner beside the speaker, caption unmoved.
+- **Snapshot and cancellation** (`test_an_export_renders_its_snapshot_…`):
+  a 30 s 1280×720 base; the placement was deleted right after approval, the
+  running export's snapshot still had it; cancelling during rendering
+  stopped it, left no MP4, and listed it as cancelled.
+- Found by running it: the captions export (2A) already shifts fully
+  saturated colours slightly relative to the FFmpeg-rendered input (pure red
+  253,0,0 → 254,23,0, PSNR ≈ 24 dB on the test grid); the B-roll export does
+  exactly the same, so comparisons are made against the captions export.
+  Not a B-roll change; noted for whoever looks at colour next.
+
+**Not verified here:** the interface in a browser (no browser automation
+was available in this session — the panel was type-checked and built, and
+its backend endpoints are covered by the tests; the walkthrough in the
+README is for a person); real footage, long or 4K bases, and real screen
+recordings (variable frame rate, odd sizes); EXIF-rotated photos; HEVC
+detection on a real phone clip (the codec rule is tested with MPEG-4 Part
+2); playback in browsers other than Chrome; the native file dialog (it is
+the same Tk code path as the existing video dialog).
+
+### Known limitations
+
+See the README's B-roll section. In short: no automatic B-roll (3B); one
+B-roll at a time; manual placement only through the minimal controls;
+referenced files are read live during an export (changes are detected and
+the result discarded, not prevented); plans are not remapped onto a re-cut
+video; the library is per workspace.
+
+### Deferred manual-editing ideas
+
+Kept out on purpose; candidates only if 3B's automatic plans need a human
+correction path: dragging placements on a timeline strip; trimming by
+dragging edges; nudge buttons (± one frame); a per-asset default template;
+stacking two layers (e.g. PiP over a full-frame); simple fades or a
+slide-in; Ken Burns motion on stills; a blurred-fill background instead of
+black bars; unmuted B-roll with ducking of the speaker.
+
+### Walkthrough
+
+One talking-head video, one image, one video asset: cut the takes → Zooms →
+**Approve and continue** → in B-roll, **Asset library → Import image or
+video…** twice → pause on a line, choose the image, **Full-frame cutaway**,
+**Add at …** → pause later, choose the clip, **Picture-in-picture**, **Add**
+→ watch the preview (speech continuous, B-roll muted, captions in place) →
+**Approve and continue** → the B-roll export runs → **Download the finished
+video**.
+
+## Roadmap
+
+| Stage | Scope | Status |
+| --- | --- | --- |
+| 0A / 0B | Projects; background jobs; structured AI plans | Done |
+| 1A / 1B | Cutting (full-clip, boundary-only), previews, AI-assisted settings | Done |
+| 2A | Transcription, editable captions, Remotion preview and export | Done |
+| 2B | Automatic zooms (Gemini plan, FFmpeg render), review and approval | Done |
+| **3A** | **B-roll foundation, not a manual editor:** a local asset library, a versioned and validated placement plan on the edited timeline, two templates (full-frame, picture-in-picture), composition with zooms and captions, review, approval and export. Manual placement is limited to one "add at playhead" action plus remove and small adjustments — enough to produce and review real results. | Done |
+| **3B** | **AI-driven B-roll selection and timing:** a planner reads the transcript and the catalog (`GET /broll/catalog`, user descriptions only, no paths) and writes a plan through `PUT …/broll/inputs/{key}/plan` with `origin: "planner"`; the same validation, composition, review and export apply. The user approves the composed result, as with zooms. | Next |
+| Later | Audio (music, sound effects), final export / OBS | Not started |

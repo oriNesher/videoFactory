@@ -10,7 +10,7 @@ all already exist returns the finished result without queueing anything.
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from . import caption_inputs, caption_jobs, cutting, jobs, storage, zoom_jobs, zoom_planner, zooms
+from . import broll, caption_inputs, caption_jobs, cutting, jobs, storage, zoom_jobs, zoom_planner, zooms
 from .models import ZoomApproveRequest, ZoomSettingsRequest, ZoomStartRequest
 
 router = APIRouter(prefix="/projects/{project_id}/zooms", tags=["zooms"])
@@ -73,6 +73,8 @@ def status(project_id: str):
         "settings": settings,
         "inputs": inputs,
         "selected_input": selected,
+        # Whether approving continues to the B-roll step (stage 3A) or exports.
+        "broll_enabled": broll.read_settings(project)["enabled"],
     }
 
 
@@ -264,15 +266,28 @@ def get_plan(project_id: str, plan_id: str):
 def approve(project_id: str, run_id: str, request: ZoomApproveRequest):
     """Approve the reviewed result, then continue to the next step.
 
-    No later module (B-roll, audio) exists yet, so the next step is the
+    The next step is the B-roll module when it is enabled for the project
+    (the default): the zoomed video becomes its base video, and B-roll's own
+    approval or skip leads to the export. With B-roll disabled it is the
     existing export: with captions, the Captions section's MP4 export draws
     the approved caption revision over the zoomed video with Remotion; without
     captions, the zoomed video itself is the finished file.
     """
-    _call(storage.read_project, project_id)
+    project = _call(storage.read_project, project_id)
     approval = _call(
         zooms.approve, project_id, run_id, output_digest=request.output_digest, captions_reference=request.captions
     )
+    if broll.read_settings(project)["enabled"]:
+        key = "zoom.%s" % run_id
+        _call(broll.save_settings, project_id, selected_input=key)
+        return {
+            "approval": approval,
+            "next": {
+                "kind": "broll",
+                "input_key": key,
+                "message": "Approved. Continue in B-roll below: add B-roll, or skip it to export.",
+            },
+        }
     if approval["captions"] is None:
         return {
             "approval": approval,

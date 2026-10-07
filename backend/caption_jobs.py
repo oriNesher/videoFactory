@@ -734,24 +734,61 @@ def run_export(context: jobs.JobContext) -> dict:
 
 
 def _render_mp4(context, snapshot, record, directory, partial, final, finish) -> dict:
-    job_file = directory / "render-job.json"
     props = captions.composition_props(
         snapshot["composition"], snapshot["captions"], snapshot["style"], snapshot["language"]
     )
     settings = snapshot["export_settings"]
+    render_composition(
+        context,
+        directory,
+        {
+            "props": props,
+            "input_path": snapshot["input"]["path"],
+            "output_path": str(partial),
+            "bundle_cache_dir": str(bundle_cache_directory()),
+            "crf": settings["crf"],
+            "x264_preset": settings["x264_preset"],
+            "concurrency": None,
+        },
+        snapshot["composition"]["duration_in_frames"],
+        record,
+        finish,
+    )
+
+    context.progress("Checking the exported file with FFprobe…", percent=100.0)
     try:
-        storage.write_json_atomic(
-            job_file,
-            {
-                "props": props,
-                "input_path": snapshot["input"]["path"],
-                "output_path": str(partial),
-                "bundle_cache_dir": str(bundle_cache_directory()),
-                "crf": settings["crf"],
-                "x264_preset": settings["x264_preset"],
-                "concurrency": None,
-            },
+        verification = verify_render(
+            str(partial), snapshot["composition"], snapshot["input"]["metadata"]["duration_seconds"]
         )
+        os.replace(partial, final)
+    except (media.MediaError, OSError, ValueError) as error:
+        message = "The rendered file failed verification and was discarded: %s" % getattr(error, "message", error)
+        finish(EXPORT_FAILED, message)
+        raise jobs.JobFailed(message) from error
+
+    record["output"] = {"filename": final.name, "size_bytes": final.stat().st_size, "media_type": "video/mp4"}
+    record["verification"] = verification
+    finish(EXPORT_SUCCEEDED)
+    return {
+        "export_id": record["export_id"],
+        "format": FORMAT_MP4,
+        "summary": "Exported %s (%.1f s, %d×%d)."
+        % (final.name, verification["duration_seconds"], verification["width"], verification["height"]),
+    }
+
+
+def render_composition(context, directory: Path, document: dict, total_frames: int, record: dict, finish) -> None:
+    """Run the Remotion render script on one job document, to its partial file.
+
+    Shared by the captions export and the B-roll export: the same script, the
+    same composition, the same progress reporting and cancellation. On
+    cancellation or failure `finish` records the outcome and the job is ended;
+    on return the partial file exists and still has to be verified.
+    """
+    job_file = directory / "render-job.json"
+    partial = Path(document["output_path"])
+    try:
+        storage.write_json_atomic(job_file, document)
     except OSError as error:
         finish(EXPORT_FAILED, "The render job could not be written: %s" % error)
         raise jobs.JobFailed(record["error"]) from error
@@ -760,7 +797,6 @@ def _render_mp4(context, snapshot, record, directory, partial, final, finish) ->
     reader = _EventReader()
     errors: list[dict] = []
     last = [0.0]
-    total_frames = snapshot["composition"]["duration_in_frames"]
     stage_messages = {
         "bundling": "Building the render bundle (once per app update)…",
         "browser": "Starting the headless browser…",
@@ -807,27 +843,6 @@ def _render_mp4(context, snapshot, record, directory, partial, final, finish) ->
         message = "Rendering failed: %s" % reason
         finish(EXPORT_FAILED, message)
         raise jobs.JobFailed(message)
-
-    context.progress("Checking the exported file with FFprobe…", percent=100.0)
-    try:
-        verification = verify_render(
-            str(partial), snapshot["composition"], snapshot["input"]["metadata"]["duration_seconds"]
-        )
-        os.replace(partial, final)
-    except (media.MediaError, OSError, ValueError) as error:
-        message = "The rendered file failed verification and was discarded: %s" % getattr(error, "message", error)
-        finish(EXPORT_FAILED, message)
-        raise jobs.JobFailed(message) from error
-
-    record["output"] = {"filename": final.name, "size_bytes": final.stat().st_size, "media_type": "video/mp4"}
-    record["verification"] = verification
-    finish(EXPORT_SUCCEEDED)
-    return {
-        "export_id": record["export_id"],
-        "format": FORMAT_MP4,
-        "summary": "Exported %s (%.1f s, %d×%d)."
-        % (final.name, verification["duration_seconds"], verification["width"], verification["height"]),
-    }
 
 
 def _job_active(project_id: str, job_id: Any) -> bool:

@@ -996,3 +996,83 @@ a.button.primary {
   text-align: start;
   vertical-align: top;
 }
+
+/* --- B-roll (stage 3A) ---------------------------------------------------- */
+
+.broll details {
+  margin-top: 12px;
+}
+
+.broll details summary {
+  cursor: pointer;
+}
+
+.broll-grid {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.broll-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.broll-card.unusable {
+  border-color: var(--bad-border);
+}
+
+.broll-thumb {
+  aspect-ratio: 16 / 9;
+  background: #111;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+}
+
+.broll-thumb img,
+.broll-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.broll-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.broll-placements {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.broll-placements li {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.broll-placements li.invalid {
+  border-color: var(--bad-border);
+}
+
+.broll-review {
+  margin-top: 12px;
+}

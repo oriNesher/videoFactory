@@ -170,6 +170,39 @@ class ZoomApproveRequest(BaseModel):
     captions: Any = None
 
 
+class BrollImportRequest(BaseModel):
+    # Absolute path to an image or video; null opens the machine's file dialog.
+    path: Any = None
+
+
+class BrollSettingsRequest(BaseModel):
+    enabled: Any = None
+    selected_input: Any = None
+
+
+class BrollAddPlacementRequest(BaseModel):
+    asset_id: Any = None
+    at_seconds: Any = None
+    template_id: Any = None
+    base_revision: Any = None
+
+
+class BrollUpdatePlacementRequest(BaseModel):
+    changes: Any = None
+    base_revision: Any = None
+
+
+class BrollPlanRequest(BaseModel):
+    placements: Any = None
+    base_revision: Any = None
+    origin: Any = None
+
+
+class BrollDecisionRequest(BaseModel):
+    # The digest of the composition the reviewer was shown.
+    composition_digest: Any = None
+
+
 class StartSubtitlesRequest(BaseModel):
     """The model and the language are fixed by the backend, not requested."""
 
