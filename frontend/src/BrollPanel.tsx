@@ -2,6 +2,7 @@ import { Player, type PlayerRef } from '@remotion/player'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addBrollPlacement,
+  applyBrollPlanningRun,
   brollAssetMediaUrl,
   brollBaseVideoUrl,
   brollExportUrl,
@@ -14,7 +15,10 @@ import {
   getBrollStatus,
   importCaptionVideo,
   removeBrollPlacement,
+  restoreBrollRevision,
+  retryJob,
   saveBrollSettings,
+  startBrollPlanning,
   updateBrollPlacement,
 } from './api'
 import BrollLibrary from './BrollLibrary'
@@ -22,7 +26,15 @@ import { describeAsset } from './brollFormat'
 import { formatTime } from './captionFormat'
 import { CaptionedVideo } from './captions/CaptionedVideo'
 import type { CaptionedVideoProps } from './captions/types'
-import type { BrollInputState, BrollLibraryAsset, BrollNext, BrollStatus, BrollStoredPlacement, Project } from './types'
+import type {
+  BrollInputState,
+  BrollLibraryAsset,
+  BrollNext,
+  BrollPlannerRun,
+  BrollStatus,
+  BrollStoredPlacement,
+  Project,
+} from './types'
 
 type Message = { kind: 'ok' | 'error' | 'warn'; text: string } | null
 
@@ -30,14 +42,15 @@ function errorText(caught: unknown, fallback: string): string {
   return caught instanceof Error ? caught.message : fallback
 }
 
+const ORIGIN_LABEL = { planner: 'automatic plan', manual: 'your correction', restore: 'restored' } as const
+
 /**
- * B-roll (stage 3A): a reusable asset library, a minimal way to place an
- * asset at the playhead, and the composed result — the speaker's video, the
- * B-roll, the captions — previewed with the very composition the export
- * renders, then approved (and exported) or skipped.
- *
- * Automatic planning is the next stage. Nothing here inserts B-roll on its
- * own: with no placements the panel says so and offers to skip.
+ * B-roll (stages 3A + 3B), result first: B-roll is planned automatically
+ * from the transcript and the described assets in the library, composed
+ * with the speaker's video and the captions, and shown in the very
+ * composition the export renders. The user reviews the result and approves
+ * it (or skips B-roll). Placement-level corrections, plan history and the
+ * library are secondary, collapsed controls.
  */
 export default function BrollPanel({ project, onJobSubmitted }: { project: Project; onJobSubmitted: () => void }) {
   const projectId = project.id
@@ -50,7 +63,9 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   const [frame, setFrame] = useState(0)
   const [assetChoice, setAssetChoice] = useState('')
   const [templateChoice, setTemplateChoice] = useState('fullframe')
+  const [libraryOpen, setLibraryOpen] = useState(false)
   const playerRef = useRef<PlayerRef>(null)
+  const libraryRef = useRef<HTMLDetailsElement>(null)
 
   const loadStatus = useCallback(async () => {
     const loaded = await getBrollStatus(projectId)
@@ -90,7 +105,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   }, [selectedKey, refresh])
 
   // A zoom approval hands its result over to this panel (it saves the
-  // selection); pick that up without a reload.
+  // selection and starts planning); pick that up without a reload.
   useEffect(() => {
     const interval = window.setInterval(() => {
       void loadStatus().then((loaded) => {
@@ -101,15 +116,17 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
     return () => window.clearInterval(interval)
   }, [loadStatus, selectedKey])
 
+  const planning = !!state?.planner.active_job
   const exporting =
     !!state?.active_job ||
     (state?.continuation &&
       'job' in state.continuation &&
       (state.continuation.job !== null || state.continuation.export?.status === 'running'))
   useEffect(() => {
-    const interval = window.setInterval(() => void refresh(), exporting ? 1500 : 8000)
+    // Reading state never calls the planner, so polling is free.
+    const interval = window.setInterval(() => void refresh(), planning || exporting ? 1500 : 8000)
     return () => window.clearInterval(interval)
-  }, [refresh, exporting])
+  }, [refresh, planning, exporting])
 
   useEffect(() => {
     const player = playerRef.current
@@ -175,9 +192,17 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   const usable = library.assets.filter((asset) => asset.status === 'available')
   const chosenAsset = usable.find((asset) => asset.id === assetChoice) ?? usable[0] ?? null
   const review = state?.review ?? null
+  const planner = state?.planner ?? null
+  const run = planner?.run ?? null
   const nameOf = (assetId: string) =>
     state?.assets[assetId]?.display_name ?? library.assets.find((asset) => asset.id === assetId)?.display_name ?? 'Missing asset'
   const issueFor = (placementId: string) => state?.issues.find((issue) => issue.placement_id === placementId)
+  const provider = status.provider
+
+  function openLibrary() {
+    setLibraryOpen(true)
+    window.setTimeout(() => libraryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
 
   async function choose(key: string) {
     await act(async () => {
@@ -194,6 +219,26 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
       await loadStatus()
       setSelectedKey(result.input_key)
     }, 'Importing the video failed.')
+  }
+
+  async function requestPlan(options: { forceReplan?: boolean; replaceCurrent?: boolean } = {}) {
+    if (!selectedKey) return
+    await act(async () => {
+      const result = await startBrollPlanning(projectId, selectedKey, options)
+      if (result.reused) setMessage({ kind: 'ok', text: 'This plan is already up to date; nothing was sent again.' })
+      if (result.job) onJobSubmitted()
+      await refresh()
+    }, 'Planning could not start.')
+  }
+
+  function makeNewPlan() {
+    const edited = plan && plan.origin !== 'planner'
+    const text = edited
+      ? 'Make a new automatic plan? Your corrections are kept as revision ' +
+        revision +
+        ' in the plan history (you can restore them), but the new plan replaces what is shown.'
+      : 'Ask for a new automatic plan? The current one stays in the plan history.'
+    if (window.confirm(text)) void requestPlan({ forceReplan: true, replaceCurrent: true })
   }
 
   async function addAtPlayhead() {
@@ -236,9 +281,9 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
           : {
               kind: 'ok',
               text:
-                kind === 'approve'
+                next.kind === 'broll_export'
                   ? 'Approved. Exporting the video with its B-roll and captions…'
-                  : 'B-roll skipped. Exporting the video with its captions…',
+                  : 'Exporting the video with its captions…',
             },
       )
       onJobSubmitted()
@@ -251,12 +296,18 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   }
 
   const composition = state?.input.composition ?? null
+  const lastJob = planner?.last_job ?? null
+  const lastJobIsNewer = !!lastJob?.finished_at && (!plan || lastJob.finished_at > plan.created_at)
+  const lastResult = (lastJob?.result ?? null) as { applied?: boolean; not_applied_reason?: string; run_id?: string } | null
 
   return (
     <section className="panel subpanel broll">
       <div className="editor-header">
         <h3>B-roll</h3>
-        <span className="badge">Manual placement · automatic planning comes next</span>
+        <span className={`badge ${provider.ready ? '' : 'warn'}`}>
+          {provider.is_mock ? provider.label : `${provider.label} · ${provider.model}`}
+          {provider.ready ? '' : ' — not configured'}
+        </span>
       </div>
       {message && <p className={`message ${message.kind}`}>{message.text}</p>}
 
@@ -287,17 +338,40 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
           Import a video…
         </button>
       </div>
-      <p className="hint">
-        B-roll is drawn over the video{state?.input.kind === 'zoom' ? ' (already zoomed — B-roll and captions are not zoomed)' : ''},
-        under the captions. The speaker&apos;s audio plays once, unchanged; B-roll is muted unless you unmute it.
-      </p>
 
       {state && !state.available && <p className="message error">{state.unavailable_reason}</p>}
       {state && state.stale_plans.length > 0 && (
         <p className="message warn">
           This video changed since B-roll was planned on it ({state.stale_plans.length} earlier plan
-          {state.stale_plans.length > 1 ? 's' : ''} kept, not applied). Place B-roll again.
+          {state.stale_plans.length > 1 ? 's' : ''} kept, not applied). Plan again for the video as it is now.
         </p>
+      )}
+
+      {state?.available && planner && (
+        <PlanningStatus
+          state={state}
+          busy={busy}
+          providerReady={provider.ready}
+          lastJobIsNewer={lastJobIsNewer}
+          lastResult={lastResult}
+          onPlan={() => void requestPlan({ replaceCurrent: !!plan })}
+          onRetry={(jobId) =>
+            void act(async () => {
+              await retryJob(projectId, jobId)
+              onJobSubmitted()
+              await refresh()
+            }, 'Retrying failed.')
+          }
+          onCancel={(jobId) => void act(() => cancelJob(projectId, jobId).then(refresh), 'Cancel failed.')}
+          onApplyRun={(runId) =>
+            void act(async () => {
+              await applyBrollPlanningRun(projectId, selectedKey!, runId, revision)
+              await refresh()
+            }, 'Applying the plan failed.')
+          }
+          onOpenLibrary={openLibrary}
+          onSkip={() => void decide('skip')}
+        />
       )}
 
       {state?.available && inputProps && composition && (
@@ -319,60 +393,14 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
             />
           </div>
           <p className="small hint">
-            This preview is the export&apos;s own composition.{' '}
-            {state.captions ? `Captions: revision ${state.captions.revision}, ${state.captions.caption_count} captions.` : 'No captions for this video.'}
+            This preview is the export&apos;s own composition: B-roll over the video
+            {state.input.kind === 'zoom' ? ' (already zoomed — B-roll and captions are not zoomed)' : ''}, under the
+            captions. The speaker&apos;s audio plays once, unchanged; B-roll is muted.{' '}
+            {state.captions ? `Captions: revision ${state.captions.revision}.` : 'No captions for this video.'}
           </p>
 
-          <h4>Add B-roll</h4>
-          {usable.length === 0 ? (
-            <p className="hint">Import an image or a video into the library below first.</p>
-          ) : (
-            <div className="row">
-              <select value={chosenAsset?.id ?? ''} onChange={(event) => setAssetChoice(event.target.value)} aria-label="Asset">
-                {usable.map((asset) => (
-                  <option key={asset.id} value={asset.id}>
-                    {asset.display_name} — {describeAsset(asset)}
-                  </option>
-                ))}
-              </select>
-              <select value={templateChoice} onChange={(event) => setTemplateChoice(event.target.value)} aria-label="Template">
-                {status.templates.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.label}
-                  </option>
-                ))}
-              </select>
-              <button type="button" className="primary" onClick={() => void addAtPlayhead()} disabled={busy || !chosenAsset}>
-                Add at {formatTime(playhead)}
-              </button>
-            </div>
-          )}
-          <p className="small hint">
-            Pause the preview where the B-roll should start. Its length is 3 s for an image, up to 4 s for a video,
-            shortened to fit the asset, the video and the next B-roll.
-          </p>
+          {plan && <ResultSummary plan={plan} run={run} editedSince={!!planner?.edited_since} duration={composition.duration_in_frames / composition.fps} />}
 
-          {placements.length === 0 ? (
-            <div className="message warn">
-              <p>{state.planner.message}</p>
-            </div>
-          ) : (
-            <ul className="broll-placements">
-              {placements.map((placement) => (
-                <PlacementRow
-                  key={placement.id}
-                  placement={placement}
-                  name={nameOf(placement.asset_id)}
-                  templates={status.templates}
-                  issue={issueFor(placement.id)?.message ?? null}
-                  busy={busy}
-                  onSeek={() => seek(placement.start)}
-                  onChange={(changes) => void change(placement, changes)}
-                  onRemove={() => void remove(placement)}
-                />
-              ))}
-            </ul>
-          )}
           {state.issues
             .filter((issue) => issue.placement_id === null || !placements.some((placement) => placement.id === issue.placement_id))
             .map((issue, index) => (
@@ -383,7 +411,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
 
           <Review
             state={state}
-            busy={busy}
+            busy={busy || planning}
             projectId={projectId}
             inputKey={selectedKey!}
             onApprove={() => void decide('approve')}
@@ -394,12 +422,111 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
             <p className="message warn">{review.outdated_reason}</p>
           )}
           {!status.renderer.ready && <p className="message warn">{status.renderer.problems.join(' ')}</p>}
+
+          <details>
+            <summary>Placements and corrections ({placements.length})</summary>
+            {placements.length > 0 && (
+              <ul className="broll-placements">
+                {placements.map((placement) => (
+                  <PlacementRow
+                    key={placement.id}
+                    placement={placement}
+                    name={nameOf(placement.asset_id)}
+                    explanation={run?.explanations[placement.id] ?? null}
+                    templates={status.templates}
+                    issue={issueFor(placement.id)?.message ?? null}
+                    busy={busy || planning}
+                    onSeek={() => seek(placement.start)}
+                    onChange={(changes) => void change(placement, changes)}
+                    onRemove={() => void remove(placement)}
+                  />
+                ))}
+              </ul>
+            )}
+            <h4>Add B-roll by hand</h4>
+            {usable.length === 0 ? (
+              <p className="hint">Import an image or a video into the library first.</p>
+            ) : (
+              <div className="row">
+                <select value={chosenAsset?.id ?? ''} onChange={(event) => setAssetChoice(event.target.value)} aria-label="Asset">
+                  {usable.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {asset.display_name} — {describeAsset(asset)}
+                    </option>
+                  ))}
+                </select>
+                <select value={templateChoice} onChange={(event) => setTemplateChoice(event.target.value)} aria-label="Template">
+                  {status.templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.label}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => void addAtPlayhead()} disabled={busy || planning || !chosenAsset}>
+                  Add at {formatTime(playhead)}
+                </button>
+              </div>
+            )}
+            <p className="small hint">
+              Pause the preview where it should start. 3 s for an image, up to 4 s for a video, shortened to fit. A
+              correction is saved as a new revision; the automatic plan stays in the history.
+            </p>
+          </details>
+
+          <details>
+            <summary>Plan history and details</summary>
+            <div className="row">
+              <button type="button" onClick={makeNewPlan} disabled={busy || planning || !provider.ready || !planner?.catalog.ready}>
+                Make a new plan
+              </button>
+            </div>
+            {state.revisions.length > 0 && (
+              <ul className="small">
+                {state.revisions.map((item) => (
+                  <li key={item.revision}>
+                    Revision {item.revision} · {ORIGIN_LABEL[item.origin] ?? item.origin} · {item.placement_count} placement
+                    {item.placement_count === 1 ? '' : 's'} · {item.created_at.slice(0, 16).replace('T', ' ')} UTC
+                    {item.revision === revision ? (
+                      ' (shown)'
+                    ) : (
+                      <button
+                        type="button"
+                        className="link"
+                        disabled={busy || planning}
+                        onClick={() =>
+                          void act(async () => {
+                            await restoreBrollRevision(projectId, selectedKey!, item.revision, revision)
+                            await refresh()
+                          }, 'Restoring failed.')
+                        }
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {run && <RunDetails run={run} />}
+            <p className="small">
+              {provider.message} {provider.free_tier_note}
+            </p>
+            {provider.data_sent.length > 0 && (
+              <p className="small">Sent per plan: {provider.data_sent.join('; ')}. Never sent: video, audio, pictures, file names, paths.</p>
+            )}
+          </details>
         </>
       )}
 
-      <details className="broll-library-section">
+      <details
+        className="broll-library-section"
+        ref={libraryRef}
+        open={libraryOpen}
+        onToggle={(event) => setLibraryOpen((event.target as HTMLDetailsElement).open)}
+      >
         <summary>
           Asset library ({library.assets.length}) — shared by all projects
+          {library.assets.some((asset) => !asset.described) ? ' · some assets need a description' : ''}
         </summary>
         <BrollLibrary
           assets={library.assets}
@@ -427,6 +554,27 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
           />
           Continue to B-roll after a zoom result is approved (off: approving zooms exports right away)
         </label>
+        <label className="field">
+          <span>How much B-roll to aim for (applies to the next plan)</span>
+          <select
+            value={status.settings.preference}
+            disabled={busy}
+            onChange={(event) =>
+              void act(async () => {
+                await saveBrollSettings(projectId, { preference: event.target.value })
+                await loadStatus()
+                setMessage({ kind: 'ok', text: 'Saved. It applies the next time a plan is made.' })
+              }, 'Saving failed.')
+            }
+          >
+            {status.preferences.map((preference) => (
+              <option key={preference.id} value={preference.id} title={preference.description}>
+                {preference.id}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="small">{status.preferences.find((item) => item.id === status.settings.preference)?.description}</p>
         {status.templates.map((template) => (
           <p key={template.id} className="small">
             <strong>{template.label}:</strong> {template.description}
@@ -438,9 +586,177 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   )
 }
 
+/** Progress, errors and the one action that matters right now. */
+function PlanningStatus({
+  state,
+  busy,
+  providerReady,
+  lastJobIsNewer,
+  lastResult,
+  onPlan,
+  onRetry,
+  onCancel,
+  onApplyRun,
+  onOpenLibrary,
+  onSkip,
+}: {
+  state: BrollInputState
+  busy: boolean
+  providerReady: boolean
+  lastJobIsNewer: boolean
+  lastResult: { applied?: boolean; not_applied_reason?: string; run_id?: string } | null
+  onPlan: () => void
+  onRetry: (jobId: string) => void
+  onCancel: (jobId: string) => void
+  onApplyRun: (runId: string) => void
+  onOpenLibrary: () => void
+  onSkip: () => void
+}) {
+  const planner = state.planner
+  const active = planner.active_job
+  const last = planner.last_job
+  if (active)
+    return (
+      <div className="message ok">
+        <p>
+          <strong>Planning B-roll…</strong> {active.progress_message}
+        </p>
+        <button type="button" onClick={() => onCancel(active.id)} disabled={busy || active.cancel_requested}>
+          Cancel
+        </button>
+      </div>
+    )
+  if (last && lastJobIsNewer && (last.status === 'failed' || last.status === 'interrupted'))
+    return (
+      <div className="message error">
+        <p>Automatic B-roll planning failed: {last.error}</p>
+        <div className="row">
+          <button type="button" className="primary" onClick={() => onRetry(last.id)} disabled={busy}>
+            Retry
+          </button>
+          {!state.plan && (
+            <button type="button" onClick={onSkip} disabled={busy}>
+              Skip B-roll
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  if (last && lastJobIsNewer && last.status === 'succeeded' && lastResult && lastResult.applied === false && lastResult.run_id)
+    return (
+      <div className="message warn">
+        <p>{lastResult.not_applied_reason}</p>
+        <button type="button" onClick={() => onApplyRun(lastResult.run_id!)} disabled={busy}>
+          Apply the new plan
+        </button>
+      </div>
+    )
+  if (state.plan) return null
+  if (!planner.catalog.ready)
+    return (
+      <div className="message warn">
+        <p>{planner.catalog.message}</p>
+        <div className="row">
+          <button type="button" className="primary" onClick={onOpenLibrary}>
+            Describe assets in the library
+          </button>
+          <button type="button" onClick={onSkip} disabled={busy}>
+            Skip B-roll
+          </button>
+        </div>
+      </div>
+    )
+  if (!providerReady)
+    return (
+      <div className="message warn">
+        <p>{planner.provider.message}</p>
+        <button type="button" onClick={onSkip} disabled={busy}>
+          Skip B-roll
+        </button>
+      </div>
+    )
+  return (
+    <div className="row">
+      <button type="button" className="primary" onClick={onPlan} disabled={busy}>
+        Plan B-roll automatically
+      </button>
+      <span className="small hint">
+        Chooses from {planner.catalog.described_count} described asset{planner.catalog.described_count === 1 ? '' : 's'}
+        {planner.catalog.message ? `. ${planner.catalog.message}` : '.'}
+      </span>
+    </div>
+  )
+}
+
+function ResultSummary({
+  plan,
+  run,
+  editedSince,
+  duration,
+}: {
+  plan: NonNullable<BrollInputState['plan']>
+  run: BrollPlannerRun | null
+  editedSince: boolean
+  duration: number
+}) {
+  const covered = plan.placements.reduce((total, placement) => total + placement.end - placement.start, 0)
+  const count = plan.placements.length
+  return (
+    <div className="broll-summary">
+      {run ? (
+        <p>
+          <strong>{count === 0 ? 'No B-roll: ' : ''}</strong>
+          {run.summary}
+        </p>
+      ) : (
+        <p>{count === 0 ? 'No B-roll placed.' : 'B-roll placed by hand.'}</p>
+      )}
+      <p className="small">
+        {count} placement{count === 1 ? '' : 's'} · {formatTime(covered)} of {formatTime(duration)} (
+        {duration > 0 ? Math.round((100 * covered) / duration) : 0}%)
+        {run ? ` · ${run.provider.is_mock ? run.provider.label : `planned by ${run.provider.model}`}` : ''}
+        {editedSince ? ' · corrected by hand since' : ''}
+        {count === 0 && run ? ' · approving keeps the video as it is' : ''}
+      </p>
+      {run && run.suggestions.length > 0 && (
+        <details className="small">
+          <summary>Ideas for assets you could add ({run.suggestions.length}) — notes only, nothing was added</summary>
+          <ul>
+            {run.suggestions.map((suggestion, index) => (
+              <li key={index}>
+                {suggestion.at_seconds !== null ? `${formatTime(suggestion.at_seconds)}: ` : ''}
+                {suggestion.description}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function RunDetails({ run }: { run: BrollPlannerRun }) {
+  return (
+    <div className="small">
+      <p>
+        Plan {run.run_id} · {run.provider.label} {run.provider.model} · prompt {run.prompt_version} · preference{' '}
+        {run.preferences.preference} · transcript revision {run.transcript.revision} ({run.transcript.segment_count}{' '}
+        phrases) · {run.audit.calls.length} request{run.audit.calls.length === 1 ? '' : 's'}
+        {run.audit.repair_used ? ' (one correction was needed)' : ''}.
+      </p>
+      <p>
+        Library: {run.catalog.counts.described} described, {run.catalog.counts.undescribed} undescribed (not offered),{' '}
+        {run.catalog.counts.unavailable} unavailable. {run.catalog.shortlist.note}
+      </p>
+      {run.normalisation.notes.length > 0 && <p>Adjustments made by the app: {run.normalisation.notes.join(' ')}</p>}
+    </div>
+  )
+}
+
 function PlacementRow({
   placement,
   name,
+  explanation,
   templates,
   issue,
   busy,
@@ -450,6 +766,7 @@ function PlacementRow({
 }: {
   placement: BrollStoredPlacement
   name: string
+  explanation: { rationale: string; spoken_text: string | null } | null
   templates: BrollStatus['templates']
   issue: string | null
   busy: boolean
@@ -485,6 +802,17 @@ function PlacementRow({
           Remove
         </button>
       </div>
+      {explanation && (
+        <p className="small">
+          {explanation.rationale}
+          {explanation.spoken_text && (
+            <>
+              {' '}
+              — <span dir="auto">“{explanation.spoken_text}”</span>
+            </>
+          )}
+        </p>
+      )}
       {issue && <p className="small message error">{issue}</p>}
       <details className="small">
         <summary>Adjust</summary>
@@ -594,23 +922,28 @@ function Review({
   const review = state.review
   const next = state.continuation
   const decided = review?.approved || review?.skipped
+  const hasPlan = !!state.plan
+  const count = state.plan?.placements.length ?? 0
 
   return (
     <div className="broll-review">
       {!decided || (next && 'export' in next && next.export?.status === 'failed') ? (
         <div className="row">
-          {(state.plan?.placements.length ?? 0) > 0 && (
+          {hasPlan && (
             <button type="button" className="primary" onClick={onApprove} disabled={busy || !review?.can_approve}>
-              {review?.approved ? 'Export again' : 'Approve and continue'}
+              {review?.approved ? 'Export again' : count === 0 ? 'Approve without B-roll and continue' : 'Approve and continue'}
             </button>
           )}
-          <button type="button" onClick={onSkip} disabled={busy}>
-            {(state.plan?.placements.length ?? 0) > 0 ? 'Skip B-roll instead' : 'Skip B-roll'}
-          </button>
+          {(count > 0 || !hasPlan) && (
+            <button type="button" onClick={onSkip} disabled={busy}>
+              {count > 0 ? 'Skip B-roll instead' : 'Skip B-roll'}
+            </button>
+          )}
         </div>
       ) : (
         <p className="message ok">
-          {review?.approved ? 'Approved' : 'B-roll skipped'} {review?.decision?.decided_at.slice(0, 16).replace('T', ' ')} UTC.
+          {review?.approved ? (review.decision?.placement_count ? 'Approved' : 'Approved without B-roll') : 'B-roll skipped'}{' '}
+          {review?.decision?.decided_at.slice(0, 16).replace('T', ' ')} UTC.
         </p>
       )}
       {decided && <Continuation next={next} projectId={projectId} inputKey={inputKey} onCancel={onCancel} />}

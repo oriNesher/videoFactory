@@ -356,7 +356,7 @@ export default function ZoomsPanel({ project, onJobSubmitted }: { project: Proje
           )}
 
           {review?.approved && !continuation && status.broll_enabled && (
-            <p className="small hint">Next step: B-roll, below. Approve or skip it there to export.</p>
+            <p className="small hint">Next step: B-roll, below — planned automatically. Approve or skip it there to export.</p>
           )}
           {review?.approved && (
             <div className="row">

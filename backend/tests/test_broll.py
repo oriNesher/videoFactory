@@ -444,7 +444,7 @@ def test_skip_and_approve_name_exactly_what_was_reviewed(client, ready, monkeypa
     monkeypatch.setattr(caption_jobs, "renderer_status", lambda: {"ready": False, "problems": ["not prepared"]})
     pid, key = ready["project"], ready["key"]
     state = state_of(client, pid, key)
-    assert state["plan"] is None and state["planner"]["implemented"] is False
+    assert state["plan"] is None and state["planner"]["implemented"] is True
     nothing = client.post(f"/projects/{pid}/broll/inputs/{key}/approve", json={"composition_digest": state["composition_digest"]})
     assert nothing.status_code == 409 and "skip" in nothing.json()["detail"]
 
@@ -471,8 +471,12 @@ def test_an_approved_zoom_hands_over_to_broll_without_exporting(client, project,
     response = client.post(f"/projects/{pid}/zooms/runs/{run_id}/approve",
                            json={"output_digest": run["output"]["fingerprint"]["digest"], "captions": run["review"]["overlay_reference"]})
     assert response.status_code == 200
-    assert response.json()["next"] == {"kind": "broll", "input_key": "zoom.%s" % run_id,
-                                       "message": "Approved. Continue in B-roll below: add B-roll, or skip it to export."}
+    following = response.json()["next"]
+    assert following["kind"] == "broll" and following["input_key"] == "zoom.%s" % run_id
+    # Stage 3B continues into planning on its own; with an empty library it cannot,
+    # and says why instead of queueing a job that would fail.
+    assert following["planning"]["status"] == "blocked" and "library is empty" in following["planning"]["message"]
+    assert "could not be planned automatically" in following["message"]
     assert client.get(f"/projects/{pid}/broll/status").json()["selected_input"] == "zoom.%s" % run_id
     assert caption_jobs.list_exports(pid) == []  # nothing exported yet
 

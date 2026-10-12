@@ -10,7 +10,7 @@ all already exist returns the finished result without queueing anything.
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from . import broll, caption_inputs, caption_jobs, cutting, jobs, storage, zoom_jobs, zoom_planner, zooms
+from . import broll, broll_planner_jobs, caption_inputs, caption_jobs, cutting, jobs, storage, zoom_jobs, zoom_planner, zooms
 from .models import ZoomApproveRequest, ZoomSettingsRequest, ZoomStartRequest
 
 router = APIRouter(prefix="/projects/{project_id}/zooms", tags=["zooms"])
@@ -280,13 +280,18 @@ def approve(project_id: str, run_id: str, request: ZoomApproveRequest):
     if broll.read_settings(project)["enabled"]:
         key = "zoom.%s" % run_id
         _call(broll.save_settings, project_id, selected_input=key)
+        # Continue without another Start: B-roll is planned in the background
+        # (unless the video already has a plan, or planning cannot start —
+        # then the reason is shown and B-roll can be placed by hand or skipped).
+        planning = broll_planner_jobs.auto_start(project_id, key)
+        message = {
+            "started": "Approved. Planning B-roll automatically — the result appears in B-roll below.",
+            "running": "Approved. B-roll is being planned — the result appears in B-roll below.",
+            "existing": "Approved. This video already has a B-roll plan; review it in B-roll below.",
+        }.get(planning["status"], "Approved. B-roll could not be planned automatically: %s" % planning["message"])
         return {
             "approval": approval,
-            "next": {
-                "kind": "broll",
-                "input_key": key,
-                "message": "Approved. Continue in B-roll below: add B-roll, or skip it to export.",
-            },
+            "next": {"kind": "broll", "input_key": key, "message": message, "planning": planning},
         }
     if approval["captions"] is None:
         return {

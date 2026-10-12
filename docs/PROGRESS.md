@@ -1595,6 +1595,160 @@ video…** twice → pause on a line, choose the image, **Full-frame cutaway**,
 **Approve and continue** → the B-roll export runs → **Download the finished
 video**.
 
+## Stage 3B — automatic B-roll selection and timing
+
+Status: complete for the mechanics; editorial quality on real footage needs
+your review (below).
+
+### What I found first
+
+- Still no CLAUDE.md or PRODUCT_PRINCIPLES.md. Stage 3A's code was in the
+  working tree but **uncommitted** (all `broll*` files untracked); it was
+  built on, not rewritten.
+- 3A already had the pieces a planner needs: one placement validator,
+  immutable plan revisions keyed by base video bytes, a catalog without
+  paths or file names, composition props shared by preview and export, and
+  approval by composition digest. 2B had the Gemini adapter, bounded retries
+  and the job/reuse pattern.
+- The library had no notion of *where* something happens inside a video
+  asset, so "described source intervals" did not exist yet (added as
+  optional user-typed **moments**).
+- Baseline before changes: the suite stopped on one failure,
+  `test_jobs.py::test_listing_is_newest_first_and_scoped_to_the_project`,
+  after 272 passes. That run's wall time was over 15 hours (the machine
+  slept); the test passes alone and in the full run below. It is a
+  timestamp-ordering test and looked like a sleep/clock artefact, not a
+  regression.
+
+### What was built
+
+**Backend:**
+
+| File | Role |
+| --- | --- |
+| `broll_planner.py` | New. Catalog (described + available only, user words apart from measurements, source rules), shortlist, request, response schema, prompt, validation and renderer-identical normalisation, Gemini and demo planners, one-repair flow, provider status |
+| `broll_planner_jobs.py` | New. The `broll_plan` job: immutable snapshot → transcript reuse (Whisper only if none) → cached or new plan → applied as a `planner` revision without overwriting edits; run records, reuse, readiness, `auto_start` |
+| `broll_library.py` | Optional `moments` (user-described intervals of a video asset), `is_described`, moments in the catalog |
+| `broll.py` | Planner preference setting; revisions carry `planner: {run_id}` (kept through corrections); `list_revisions`, `restore_revision` (`origin: restore`); a reviewed empty plan can be approved |
+| `api_broll.py` | Planner state in the input view; `POST …/planner/runs`, `GET /planner/runs/{run}`, `POST …/planner/runs/{run}/apply`, `POST …/plan/restore/{rev}`; approving "no B-roll" continues like a skip |
+| `api_zooms.py` | Approving zooms (B-roll enabled) starts B-roll planning |
+| `capabilities.py`, `models.py`, `main.py` | Text, request bodies, job registration |
+| `tests/test_broll_planner.py` | New. 46 tests |
+| `tests/test_broll.py` | Two assertions updated for 3B (the planner is implemented; the zoom hand-over now reports planning). No check weakened |
+
+**Frontend:** `BrollPanel.tsx` reorganised result-first (planning status →
+preview → summary → approve; corrections, history and settings collapsed);
+`BrollLibrary.tsx` shows *Not described* and edits moments;
+`src/broll/moments.ts` (parser) with tests; types, API calls, CSS; the
+Zooms hint. No new dependency.
+
+### Decisions
+
+**Described means the user said so.** An asset is offered only if it has a
+description, tags or moments; a name alone is not enough (often a retyped
+file name). Everything else stays manually usable. No vision tagging, no
+upload — the request carries text only.
+
+**Whole-asset videos play from their start.** Without moments nothing says
+where an event is inside a video, so the planner may not choose an in-point
+(`source_start` must be 0 — the documented default interval `[0, length]`).
+With moments, the in-point and the whole placement must fit inside one.
+
+**Hard limits are guards, not a pattern.** 1–15 s per planned placement and
+at most 50 % coverage are validation rules (a violation gets the one repair
+request); no count, no interval, no rhythm is imposed. Asset audio cannot be
+unmuted by the planner; only `fit`, `position` and `size_percent` are
+settable.
+
+**Normalisation equals the renderer.** Times are stored as the frame the
+composition shows them on (`ceil(t·fps − 1e-6)/fps`, as `timing.ts`),
+in-points as `Math.round(source_start·fps)/fps` (as `layout.ts`). Found by
+testing: the first version rounded to the *nearest* frame, which disagreed
+with the renderer for times after a frame's midpoint (and Python's
+banker's rounding broke ties differently from JavaScript). The tolerance is
+documented: under one frame for times, half a frame for in-points, half a
+frame (+1 ms) past the end clamped.
+
+**Failures stay failures; empty is a result.** A provider error, a quota or
+an invalid answer fails the job with **Retry**; a valid `placements: []`
+with a summary is a plan revision that can be approved ("no B-roll"), which
+continues exactly like a skip.
+
+**Never overwrite.** Plans are revisions. An existing plan is replaced only
+on an explicit, confirmed **Make a new plan**; the auto-start after zoom
+approval never runs if a plan exists. A plan finished while the user
+edited is kept, not applied, with **Apply the new plan**.
+
+**Cache key** = prompt + rules version, plan schema, base bytes, transcript
+id + revision, offered catalog (views + asset digests), template version,
+provider + model, preference, caption band. Caption font/size/colour are
+deliberately out; caption *text* is in (via the revision).
+
+**Same provider settings as zooms.** One key, one model setting, one demo
+switch; documented. No new environment variables.
+
+### Checks performed
+
+Automated, on this machine:
+
+- `.venv\Scripts\python.exe -m pytest backend\tests -q` → **503 passed**
+  (457 after 3A + 46 new in `test_broll_planner.py`), 11.5 minutes,
+  including three real Remotion renders.
+- `npm.cmd test` → **13 passed** (11 existing + 2 moments).
+- `npm.cmd run build` → succeeded (the existing >500 kB chunk warning).
+- `npm.cmd run lint` → the same nine `set-state-in-effect` warnings as
+  after 3A; none new.
+
+Real media (`test_a_planned_composition_renders_at_the_planned_times`): a
+planner answer (controlled) put a red 16:9 image full-frame at 0.59–1.6 s
+and a 4:3 H.264 clip picture-in-picture at 2.0–3.2 s from its described
+0.5 s moment, on a 360×640, 25 fps, 6 s base with Hebrew captions from the
+stand-in Whisper. The approved export: FFprobe one H.264 + one AAC stream,
+360×640, 150 frames, 6.0 s; frame 14 the speaker, frames 15–39 the
+letterboxed image (0.59 s → frame 15, stored as 0.6), frame 40 the speaker;
+lime PiP top-right on frames 50–79, not 49 or 80; caption text visible over
+the image; speech RMS within ±1 dB of the source; the asset's 300 Hz tone
+absent; Whisper ran once, the planner was asked once. I looked at frames
+14, 20, 39 and 60: speaker with caption "שלום לכולם,"; the red image with
+the caption readable on the black bar; the image again with "זה מבחן של";
+the PiP in the top-right corner beside the speaker with the caption below.
+
+**Not verified here:** a live Gemini request for B-roll (not authorised in
+this session; the request shape is the zoom planner's, which was verified
+live in 2B, with a new schema using only the same features — object, array,
+string enum, number, required); editorial quality on real Hebrew footage;
+the panel in a browser (no browser automation in this session — it was
+type-checked and built, and its endpoints are covered by tests); long
+transcripts near the size budget; libraries over 40 described assets with
+real descriptions.
+
+### Known limitations
+
+See the README's *Known limitations (automatic B-roll)*. In short: quality
+unverified on real footage; the planner knows only the user's words; no
+vision tagging; whole-asset videos start at 0; limits fixed in code.
+
+### Deferred improvements (grounded in what was seen)
+
+- The shortlist is plain word overlap. Hebrew morphology beyond one prefix
+  letter (plural/construct forms) will miss matches in large libraries; a
+  stemmer or the model itself ranking descriptions would help — only if
+  large libraries turn out to be common.
+- Descriptions in a different language from the speech match poorly in the
+  shortlist (not in the model). Worth watching once real libraries exist.
+- Moments are typed by hand; a "mark moment at playhead" button in the
+  asset preview would make them cheaper to write.
+- The 1–15 s / 50 % limits may need to move into settings once real plans
+  are judged.
+
+### Walkthrough
+
+Describe three assets (one screen recording with a moment) and leave one
+undescribed → cut, zoom, **Approve and continue** → B-roll plans by itself →
+watch the composed preview and read the summary and each placement's reason
+→ (optionally correct one placement; the plan history keeps both) →
+**Approve and continue** → download. See README steps 53–59.
+
 ## Roadmap
 
 | Stage | Scope | Status |
@@ -1604,5 +1758,6 @@ video**.
 | 2A | Transcription, editable captions, Remotion preview and export | Done |
 | 2B | Automatic zooms (Gemini plan, FFmpeg render), review and approval | Done |
 | **3A** | **B-roll foundation, not a manual editor:** a local asset library, a versioned and validated placement plan on the edited timeline, two templates (full-frame, picture-in-picture), composition with zooms and captions, review, approval and export. Manual placement is limited to one "add at playhead" action plus remove and small adjustments — enough to produce and review real results. | Done |
-| **3B** | **AI-driven B-roll selection and timing:** a planner reads the transcript and the catalog (`GET /broll/catalog`, user descriptions only, no paths) and writes a plan through `PUT …/broll/inputs/{key}/plan` with `origin: "planner"`; the same validation, composition, review and export apply. The user approves the composed result, as with zooms. | Next |
-| Later | Audio (music, sound effects), final export / OBS | Not started |
+| **3B** | **AI-driven B-roll selection and timing:** Gemini chooses described assets, times, in-points and templates from the transcript; validated, saved as a plan revision, composed and reviewed as a result; starts on its own after zoom approval. | Done |
+| **4** | **Background music and sound effects** (next): music bed and SFX chosen and mixed under the speaker, reviewed like B-roll. | Next |
+| Later | Final export / OBS | Not started |

@@ -23,9 +23,10 @@ each entry's derived `status`:
 
 **Measured vs. described.** Everything under `measured` comes from the file:
 dimensions after rotation, aspect ratio, duration and audio for videos, codec.
-`description` and `tags` are only ever what the user typed; nothing is derived
-from a filename or guessed from the picture. The library never claims to know
-what an asset shows.
+`description`, `tags` and `moments` (stage 3B: "from 0:05 to 0:12 the
+dashboard is shown" — optional, videos only) are only ever what the user
+typed; nothing is derived from a filename or guessed from the picture. The
+library never claims to know what an asset shows.
 
 Placements live in each project's B-roll plans (`broll.py`) and refer to an
 entry by its stable `id`. Removing an entry from the library never touches the
@@ -343,6 +344,8 @@ def public_entry(entry: dict) -> dict:
         "display_name_source": "user" if entry.get("display_name") else "filename",
         "description": entry.get("description"),
         "tags": list(entry.get("tags") or []),
+        "moments": valid_moments(entry),
+        "described": is_described(entry),
         "measured": entry["measured"],
         "fingerprint": entry["fingerprint"],
         "imported_at": entry.get("imported_at"),
@@ -438,13 +441,72 @@ def _clean_tags(raw: Any) -> list[str]:
     return tags
 
 
+def _finite_seconds(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and abs(value) != float("inf")
+
+
+def _clean_moments(raw: Any, entry: dict) -> list[dict]:
+    """User-described stretches inside a video asset, checked against its length."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise LibraryError("Moments must be a list.")
+    if raw and entry["media_type"] != MEDIA_VIDEO:
+        raise LibraryError("Only a video has moments; describe an image as a whole.")
+    if len(raw) > MAX_MOMENTS:
+        raise LibraryError("Up to %d described moments." % MAX_MOMENTS)
+    duration = float(entry["measured"].get("duration_seconds") or 0.0)
+    moments = []
+    for number, item in enumerate(raw, start=1):
+        if not isinstance(item, dict) or set(item) - {"start", "end", "description"}:
+            raise LibraryError("Moment %d must have a start, an end and a description." % number)
+        start, end = item.get("start"), item.get("end")
+        if not _finite_seconds(start) or not _finite_seconds(end):
+            raise LibraryError("Moment %d: start and end must be numbers of seconds." % number)
+        start, end = float(start), float(end)
+        if start < 0 or end > duration + 0.001 or end - start < MIN_MOMENT_SECONDS:
+            raise LibraryError(
+                "Moment %d (%.2f–%.2f s) must lie inside the video (0–%.2f s) and last at least %.1f s."
+                % (number, start, end, duration, MIN_MOMENT_SECONDS)
+            )
+        description = _clean_text(item.get("description"), MAX_MOMENT_DESCRIPTION, "Moment %d's description" % number)
+        if not description:
+            raise LibraryError("Moment %d needs a description of what it shows." % number)
+        moments.append({"start": round(start, 3), "end": round(min(end, duration), 3), "description": description})
+    moments.sort(key=lambda moment: (moment["start"], moment["end"]))
+    return moments
+
+
+def valid_moments(entry: dict) -> list[dict]:
+    """Stored moments that still fit the asset as measured now (a re-measured,
+    shorter file drops the ones past its end rather than inventing new times)."""
+    if entry["media_type"] != MEDIA_VIDEO:
+        return []
+    duration = float(entry["measured"].get("duration_seconds") or 0.0)
+    return [
+        dict(moment) for moment in entry.get("moments") or []
+        if isinstance(moment, dict) and _finite_seconds(moment.get("start")) and _finite_seconds(moment.get("end"))
+        and 0 <= moment["start"] < moment["end"] <= duration + 0.001 and isinstance(moment.get("description"), str)
+    ]
+
+
+def is_described(entry: dict) -> bool:
+    """Whether the user said what the asset shows: a description, tags or moments.
+
+    A name alone is not enough — it is often a file name retyped — and nothing
+    measured counts. Undescribed assets stay usable by hand; the automatic
+    planner does not choose them.
+    """
+    return bool(entry.get("description") or entry.get("tags") or valid_moments(entry))
+
+
 def update_details(asset_id: Any, changes: dict) -> dict:
-    """The user's own words: display name, description, tags. Nothing measured."""
+    """The user's own words: display name, description, tags, moments. Nothing measured."""
     asset_id = validate_asset_id(asset_id)
-    allowed = {"display_name", "description", "tags"}
+    allowed = {"display_name", "description", "tags", "moments"}
     unknown = set(changes) - allowed
     if unknown:
-        raise LibraryError("Only the name, description and tags can be edited.")
+        raise LibraryError("Only the name, description, tags and moments can be edited.")
     with _lock:
         document = _read_document()
         entry = next((item for item in document["assets"] if item["id"] == asset_id), None)
@@ -457,6 +519,8 @@ def update_details(asset_id: Any, changes: dict) -> dict:
             entry["description"] = _clean_text(changes["description"], MAX_DESCRIPTION, "The description")
         if "tags" in changes:
             entry["tags"] = _clean_tags(changes["tags"])
+        if "moments" in changes:
+            entry["moments"] = _clean_moments(changes["moments"], entry)
         _write_document(document)
         return public_entry(entry)
 
@@ -547,6 +611,7 @@ def catalog_entry(entry: dict) -> dict:
         "user_label": entry.get("display_name"),
         "user_description": entry.get("description"),
         "user_tags": list(entry.get("tags") or []),
+        "user_moments": valid_moments(entry),
         "semantic_description": "user_provided" if has_description else "none",
         "width": measured["width"],
         "height": measured["height"],
@@ -559,7 +624,7 @@ def catalog_entry(entry: dict) -> dict:
 
 CATALOG_NOTE = (
     "Technical fields (size, aspect ratio, duration, audio) are measured from the file "
-    "and say nothing about what an asset shows. Only user_label, user_description and "
-    "user_tags were written by a person; when semantic_description is \"none\", nothing "
-    "is known about the asset's content and none may be assumed."
+    "and say nothing about what an asset shows. Only user_label, user_description, "
+    "user_tags and user_moments were written by a person; when semantic_description is "
+    "\"none\", nothing is known about the asset's content and none may be assumed."
 )

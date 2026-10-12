@@ -3,8 +3,10 @@ import type {
   BrollDecision,
   BrollInputState,
   BrollLibraryAsset,
+  BrollMoment,
   BrollNext,
   BrollPlan,
+  BrollPlannerRun,
   BrollStatus,
   CaptionCatalog,
   CaptionCheck,
@@ -35,6 +37,7 @@ import type {
   ToolVersion,
   ZoomApproveResult,
   ZoomInputState,
+  ZoomJobSummary,
   ZoomOverlayReference,
   ZoomRun,
   ZoomStatus,
@@ -634,7 +637,7 @@ export function importBrollAsset(path: string | null) {
 
 export function updateBrollAsset(
   assetId: string,
-  changes: { display_name?: string | null; description?: string | null; tags?: string[] },
+  changes: { display_name?: string | null; description?: string | null; tags?: string[]; moments?: BrollMoment[] },
 ) {
   return request<BrollLibraryAsset>(`/broll/library/${assetId}`, { method: 'PATCH', body: JSON.stringify(changes) })
 }
@@ -662,7 +665,10 @@ export function getBrollStatus(projectId: string) {
   return request<BrollStatus>(`${brollBase(projectId)}/status`)
 }
 
-export function saveBrollSettings(projectId: string, changes: { enabled?: boolean; selected_input?: string }) {
+export function saveBrollSettings(
+  projectId: string,
+  changes: { enabled?: boolean; selected_input?: string; preference?: string },
+) {
   return request<BrollStatus['settings']>(`${brollBase(projectId)}/settings`, {
     method: 'PUT',
     body: JSON.stringify(changes),
@@ -709,6 +715,39 @@ export function decideBroll(projectId: string, inputKey: string, decision: 'appr
   return request<{ decision: BrollDecision; next: BrollNext }>(`${brollBase(projectId)}/inputs/${inputKey}/${decision}`, {
     method: 'POST',
     body: JSON.stringify({ composition_digest: compositionDigest }),
+  })
+}
+
+/**
+ * Plan B-roll automatically (stage 3B). Idempotent: a running job is
+ * returned, and an unedited plan for exactly today's inputs comes back as
+ * `reused` without asking the provider again.
+ */
+export function startBrollPlanning(
+  projectId: string,
+  inputKey: string,
+  options: { forceReplan?: boolean; replaceCurrent?: boolean } = {},
+) {
+  return request<{ job: ZoomJobSummary | null; reused: BrollPlannerRun | null }>(
+    `${brollBase(projectId)}/inputs/${inputKey}/planner/runs`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ force_replan: options.forceReplan ?? false, replace_current: options.replaceCurrent ?? false }),
+    },
+  )
+}
+
+export function applyBrollPlanningRun(projectId: string, inputKey: string, runId: string, baseRevision: number) {
+  return request<BrollPlan>(`${brollBase(projectId)}/inputs/${inputKey}/planner/runs/${runId}/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ base_revision: baseRevision }),
+  })
+}
+
+export function restoreBrollRevision(projectId: string, inputKey: string, revision: number, baseRevision: number) {
+  return request<BrollPlan>(`${brollBase(projectId)}/inputs/${inputKey}/plan/restore/${revision}`, {
+    method: 'POST',
+    body: JSON.stringify({ base_revision: baseRevision }),
   })
 }
 

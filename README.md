@@ -4,23 +4,28 @@ A local application for producing talking-head videos through one interface,
 instead of driving separate command-line tools by hand.
 
 Everything runs on this machine. There is no cloud storage, no authentication
-and no upload of media of any kind. Two exceptions send **text only**, and
+and no upload of media of any kind. Three exceptions send **text only**, and
 only when configured: an AI editing plan (see
-[AI plans](#ai-plans-mock-mode-and-the-real-provider)), and **zoom planning**,
+[AI plans](#ai-plans-mock-mode-and-the-real-provider)), **zoom planning**,
 which sends a video's transcript and timings to Google's Gemini API (see
-[Zooms](#zooms-stage-2b)). Video and audio never leave the computer.
+[Zooms](#zooms-stage-2b)), and **B-roll planning**, which sends the
+transcript plus your own asset descriptions (see
+[Automatic B-roll](#automatic-b-roll-stage-3b)). Video, audio and pictures
+never leave the computer.
 
-Current state: **stage 3A** — projects, background jobs, structured AI
+Current state: **stage 3B** — projects, background jobs, structured AI
 editing plans, cutting in two modes (**boundary-only trimming**, the default,
 and **full-clip silence removal** with Auto-Editor), **captions** (local
 Hebrew transcription with Whisper, editable caption revisions, a Remotion
 preview, MP4 or SRT export), **automatic zooms** (Gemini plans punch-in
-zooms from the transcript, FFmpeg renders them, you review and approve), and
-now the **B-roll foundation**: a local library of your own images and
-videos, a validated placement plan, full-frame and picture-in-picture
-templates composed between the (zoomed) speaker and the captions, review,
-approval and export. Choosing B-roll automatically is the next stage; for
-now it is placed by hand. See [B-roll](#b-roll-stage-3a) and
+zooms from the transcript, FFmpeg renders them, you review and approve), the
+**B-roll foundation** (a local library of your own images and videos, a
+validated placement plan, full-frame and picture-in-picture templates
+composed between the (zoomed) speaker and the captions, review, approval and
+export) and now **automatic B-roll**: Gemini chooses which described assets
+to show, where, for how long and with which template; you watch the composed
+result and approve it. See [B-roll](#b-roll-stage-3a),
+[Automatic B-roll](#automatic-b-roll-stage-3b) and
 [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Requirements
@@ -1057,10 +1062,9 @@ parts:
 Stage 3A is the **foundation** for B-roll: a reusable library of your own
 images and videos, a validated placement plan, two templates, and one
 composition that draws the speaker's video, the B-roll and the captions for
-both the preview and the export. **Choosing B-roll automatically — which
-asset, where, for how long — is stage 3B and is not implemented.** Until
-then B-roll is placed by hand with one small action, and nothing is ever
-inserted on its own.
+both the preview and the export. Stage 3B plans B-roll automatically on top
+of it — see [Automatic B-roll](#automatic-b-roll-stage-3b). The manual
+placement described here remains as the correction path.
 
 Open a project and scroll to **B-roll** (below **Zooms**).
 
@@ -1093,7 +1097,10 @@ the workspace.
   format*. **Remove from library** removes the entry, never the file.
 - **Play** previews a video asset in place.
 
-### Placing B-roll (the temporary manual path)
+### Placing B-roll by hand (corrections)
+
+Since stage 3B this lives under **Placements and corrections** and is
+secondary: the normal path is the automatic plan.
 
 1. **Video.** Choose the base video. The default is the factory's latest
    approved result: an approved zoomed video, else the newest merged cut
@@ -1109,8 +1116,8 @@ the workspace.
    and **Adjust** (start, end, the in-point inside a video asset, and the
    template's settings) — secondary, collapsed controls.
 
-With no placements the section says that automatic planning is not
-implemented yet and offers **Skip B-roll**.
+Each correction is a new plan revision; the automatic plan stays in **Plan
+history and details**, where any earlier revision can be restored.
 
 ### Templates
 
@@ -1213,14 +1220,16 @@ second per second.
   resolved props. It then starts the **B-roll export** (MP4, H.264 + AAC, as
   the captions export), whose download appears in the section. Any later
   change to any of those marks the approval outdated; nothing is re-rendered
-  for that.
+  for that. A reviewed plan with **no placements** (stage 3B's honest "no
+  B-roll") is approved the same way and continues like a skip.
 - **Skip B-roll** records a skip the same way and continues to the existing
   export: the captioned export of the base video when it has captions, or
   the base video itself as the finished file.
 - **From Zooms.** With B-roll enabled (the default; **Settings and
   templates** has the switch), approving a zoom result no longer exports
-  directly: the zoomed video becomes B-roll's base and the next step is
-  here. Switched off, approving zooms exports as before.
+  directly: the zoomed video becomes B-roll's base, B-roll planning starts
+  on its own, and the next step is here. Switched off, approving zooms
+  exports as before.
 - **Immutable snapshots.** An export freezes the base (path, fingerprint,
   metadata), each asset (path, fingerprint), the plan revision, the caption
   reference, the resolved props and the encoder settings into its job.
@@ -1235,23 +1244,19 @@ second per second.
 - **Nothing upstream reruns.** B-roll reads the existing transcript, caption
   revision and zoom output; it never transcribes or zooms.
 
-### The catalog for stage 3B
+### The catalog
 
 `GET /broll/catalog` (and `GET /projects/<id>/broll/catalog?input_key=…`,
-which adds the base video's length and frame rate) returns what a future
-planner will be given: the templates with their setting schemas and
-defaults, the placement constraints, and every asset as `asset_id`, media
-type, usability, measured size / aspect ratio / orientation / duration /
-audio, and the user's own label, description and tags. **No paths and no
-file names.** `semantic_description` is `"none"` unless you wrote a
-description, and the catalog states that technical metadata says nothing
-about content. A planner will submit placements through
-`PUT /projects/<id>/broll/inputs/<key>/plan` (`origin: "planner"`), which
-uses the same validation, review and rendering path as the manual one.
+which adds the base video's length and frame rate) returns the templates
+with their setting schemas and defaults, the placement constraints, and
+every asset as `asset_id`, media type, usability, measured size / aspect
+ratio / orientation / duration / audio, and the user's own label,
+description, tags and moments. **No paths and no file names.**
+`semantic_description` is `"none"` unless you wrote a description, and the
+catalog states that technical metadata says nothing about content.
 
 ### Known limitations (B-roll)
 
-- **No automatic B-roll.** Stage 3B.
 - **Manual placement is deliberately minimal:** no timeline, drag and drop,
   keyframes, waveform, transitions or motion graphics.
 - **One B-roll at a time**; no stacking.
@@ -1265,6 +1270,178 @@ uses the same validation, review and rendering path as the manual one.
   base video; place B-roll again (plans are not remapped).
 - **The library is per workspace**, not per project, and its paths are
   machine-specific like footage paths.
+
+## Automatic B-roll (stage 3B)
+
+B-roll is now chosen automatically: **which** of your assets to show,
+**where** on the edited video, **for how long**, from **which point** inside
+a video asset, and with **which template** — plus a one-line reason tied to
+what is said. You review the composed result, not the plan.
+
+### The workflow
+
+1. **Approve your zooms** (or, without zooms, open **B-roll**, choose the
+   video and press **Plan B-roll automatically** — the only button there).
+   With B-roll enabled, approving zooms starts planning by itself; there is
+   no Start to press.
+2. **Planning runs in the background** (the B-roll section shows its
+   progress, with **Cancel**). It reuses the video's transcript — its latest
+   caption revision, so your caption corrections count — and transcribes
+   locally only if the video has none. A zoomed video uses its clean
+   parent's transcript.
+3. **The composed preview appears** in the same player the export uses,
+   with a short summary: what was added and why (or why nothing was), how
+   many placements, how much of the video they cover, and which model
+   planned them.
+4. **Approve and continue** exports it (the B-roll export from stage 3A).
+   A result with no B-roll reads **Approve without B-roll and continue** and
+   goes on to the captions export, exactly like a skip. **Skip B-roll
+   instead** is always there.
+
+Corrections are secondary and collapsed: **Placements and corrections**
+lists every placement with its reason (▶ jump, template, **Remove**,
+**Adjust**) and the manual **Add at m:ss** control. **Plan history and
+details** has **Make a new plan**, every revision with **Restore**, and the
+plan's provenance.
+
+### What your assets need
+
+Automatic planning only uses what **you wrote** about an asset — it never
+looks at pictures and never guesses from a file name. In **Asset library →
+Details** (cards without a description show **Not described**):
+
+- **Description** — what it shows, ideally in the words you say on camera
+  ("גרף המכירות של הרבעון", "screen recording of the export dialog").
+- **Tags** — optional extra words.
+- **Moments** (videos only, optional) — one per line, `0:05-0:12 what is
+  shown there`. With moments, the planner may start the video inside one of
+  them. **Without moments, a video is described "as a whole" and always
+  plays from its start**: nothing says where anything happens inside it,
+  so the planner is not allowed to pick an in-point.
+
+An asset with a description, tags or moments counts as described. A name
+alone does not. Undescribed assets stay in the library and can still be
+placed by hand; automatic planning just never chooses them. If no usable
+asset is described, the section shows **one** message with **Describe
+assets in the library** and **Skip B-roll** — nothing is sent.
+
+### What Gemini receives
+
+The same provider settings as zoom planning (`GEMINI_API_KEY`,
+`VIDEO_FACTORY_GEMINI_MODEL`, default `gemini-3.5-flash`,
+`VIDEO_FACTORY_GEMINI_TIMEOUT`; `VIDEO_FACTORY_ZOOM_PROVIDER=mock` switches
+both to the labelled demo rules). One JSON request per plan, with a
+response schema:
+
+- the transcript as phrases with their (approximate) times — no word
+  timings;
+- the video's duration, frame rate, orientation; where takes were joined;
+  the punch-in zooms already in it; where captions sit (top or bottom);
+- for each **described, available** asset: an id, image/video, measured
+  size, aspect ratio and length, and your label, description, tags and
+  moments — kept apart from the measurements and labelled as your words;
+- the two templates with the few settings the planner may set (full-frame
+  `fit`; picture-in-picture `position` and `size_percent`), the rules
+  below, and your preference (*restrained*, the default; *balanced*;
+  *generous* — under **Settings and templates**).
+
+**Never sent:** video, audio, images, file names, paths, the project name,
+the key. The exact request is stored with each plan (`GET
+/projects/<id>/broll/planner/runs/<run>` → `request_sent`). The free-tier
+data terms in [Zooms](#what-is-sent-to-google-and-what-google-may-do-with-it)
+apply — **including to your asset descriptions**.
+
+**Large libraries.** At most 40 assets are offered per request. If more are
+described, the 40 whose own words share the most words with the transcript
+(Hebrew niqqud and one leading prefix letter ignored) are offered; the run
+records how many were left out and the panel says so. The transcript is
+never cut: one longer than 60 000 characters (or a request over 120 000)
+is refused with the reason, before anything is sent.
+
+### What the planner may and may not do
+
+The prompt asks for conservative editing: B-roll only where an asset
+clearly shows what is being said, the speaker on camera for substantial
+stretches (especially the hook and personal lines), no constant overlays,
+no repetitive use, no decorative or humorous placements, no treating a
+loosely related asset as proof of a claim, and **an empty plan when nothing
+fits**. There is no target number and no rhythm. The backend enforces hard
+limits on top: each planned placement lasts **1–15 s**, all together cover
+**at most 50 %** of the video, one at a time, inside the video, and the
+asset rules above. Asset audio stays muted; the planner cannot add music,
+sound, transitions or templates.
+
+It may add up to five **ideas for assets you could add** ("a photo of the
+team at 0:42"). These are notes under the summary — they never become
+placements, download anything or block anything.
+
+### Validation, repair and retries
+
+Every answer is validated before anything changes: offered asset ids only
+(an undescribed or unknown asset is refused, never replaced), implemented
+templates and whitelisted settings only, finite times, bounds, lengths,
+coverage, in-points against moments, and then Stage 3A's own placement
+validator (availability, settings ranges, asset length, overlaps). Unknown
+fields are refused.
+
+The only changes the app makes are technical and listed under **Plan
+history and details → Adjustments made by the app**: each start/end becomes
+the frame the composition shows it on (`ceil(t·fps)` — under one frame
+later, never earlier), each in-point the asset frame shown first
+(`round(source_start·fps)`, at most half a frame), an end up to half a frame
+past the video is clamped to its end, a video's missing in-point becomes 0.
+So the stored plan is exactly what renders.
+
+Anything else wrong gets **one** correction request listing the problems; a
+second invalid answer fails the job, nothing changes, and both answers are
+saved (`intermediates\broll\planner\rejected-*.json`). Provider failures
+follow zoom planning's rules — at most three attempts, rate-limit delays
+honoured up to 65 s, daily quota never retried, no fallback to any other
+provider or model, paid or not — and are shown as errors with **Retry**.
+They are never turned into an empty plan.
+
+### Reuse, revisions and approval
+
+- **No duplicate requests.** Reading the section never calls the provider.
+  A second click while planning returns the same job. **Plan** again with
+  the same base video, transcript revision, offered assets (their words and
+  bytes), templates, model, prompt version, preference and caption band
+  returns the existing plan without a job. A **Retry** reuses a plan the
+  first attempt already received.
+- **What triggers a new request** (when you ask for one): changed caption
+  text (it changes what is said), a different video, changed descriptions
+  or assets, a different preference, captions moved between top and bottom.
+  Caption font, size or colour do not. Adding an unrelated asset does not
+  touch an approved result (approval names only the assets used).
+- **Revisions, never overwrites.** A plan becomes a new immutable revision
+  (`origin: planner`). Your corrections are new revisions on top, and the
+  planner's reasons stay attached to the placements they explain. If the
+  video already has a plan, **Make a new plan** asks for confirmation and
+  adds a revision; nothing earlier is lost, and **Restore** brings any
+  revision back. If you edit the plan *while* it is being made, the new
+  plan is kept but **not applied** ("Apply the new plan" offers it).
+- **Snapshots.** A planning job freezes the transcript revision, the
+  library entries and the settings when it is requested; editing captions
+  or descriptions while it runs changes nothing it does.
+- **Approval** is Stage 3A's: it names the exact composed revision; a new
+  plan, a correction, a changed asset or captions outdates it. Nothing
+  upstream (transcription, zooms) is ever redone for B-roll.
+
+### Known limitations (automatic B-roll)
+
+- **Editorial quality is unverified on real footage.** The tests prove the
+  mechanics with controlled answers; whether Gemini's choices suit your
+  Hebrew videos is yours to judge.
+- The planner knows only your words. A vague description ("clip 3") gives
+  it nothing; a description in a different language from the speech can
+  still work but matches less well in the shortlist.
+- No vision tagging, no automatic upload or download of assets.
+- Whole-asset videos always play from their start; describe moments to use
+  their middle.
+- Hard limits (1–15 s, 50 % coverage) are fixed in code
+  (`backend/broll_planner.py`), not settings.
+- The plan belongs to one exact video: re-cutting or re-zooming makes a new
+  base video, which is planned again.
 
 ## Subtitles with Whisper (per cutting run, older)
 
@@ -1370,7 +1547,25 @@ frame by frame at every placement boundary, for size and aspect, for
 captions at the same place, and by its audio (speech once, at the same
 level and time; the asset's own tone muted); and a cancelled export that
 rendered its snapshot. `npm.cmd test` also runs `frontend\tests\broll.test.ts`
-(placement frames, in-points, picture-in-picture geometry).
+(placement frames, in-points, picture-in-picture geometry, and the
+described-moments field).
+
+`backend\tests\test_broll_planner.py` covers stage 3B with controlled model
+answers (no test calls Gemini): only described, available assets offered,
+no paths or file names in the request; one library-level message and no
+request when nothing is described; the shortlist; every rejection (unknown
+or undescribed assets, unknown templates and settings, unmuting, non-finite
+or out-of-range times, too short / too long, overlaps, coverage, in-points
+outside moments or inside whole-asset videos, malformed answers); frame
+alignment identical to the renderer; valid empty plans; one repair then
+failure with the rejected answers saved; missing key, daily quota,
+timeouts, rate limits and server errors (bounded attempts, never an empty
+plan, no fallback); reuse without a request, a second click, polling;
+caption styling vs. caption band; corrections never overwritten, edits
+during planning, restoring revisions; approval of the exact revision and of
+"no B-roll"; the zoom → planning hand-over on the parent's transcript; and a
+**real Remotion export** of a planner-made plan, checked at the planned
+frames, for captions, muted asset audio and with FFprobe.
 
 The Python tests use a throwaway workspace and a stubbed provider: they never
 touch `workspace\`, your footage, or the network.
@@ -1412,6 +1607,7 @@ tools are not on `PATH`, those tests skip rather than fail.
 | B-roll library (all projects) | `workspace\library\broll\library.json`, `…\thumbnails\` (the files themselves stay where they are) |
 | B-roll plans (immutable revisions) | `…\intermediates\broll\plans\<plan-id>\rev-000N.json` |
 | B-roll approve / skip decisions | `…\intermediates\broll\decisions\<video-key>.json` |
+| B-roll planning runs (immutable) | `…\intermediates\broll\planner\runs\<run-id>.json` (provenance, reasons, the exact request); rejected answers `…\planner\rejected-<id>.json` |
 | B-roll exports | `workspace\projects\<project-id>\exports\broll\<export-id>\` (`export.json`, `snapshot.json`, `<name>.broll.mp4`, `logs\`) |
 | Remotion render bundle | `workspace\cache\remotion-bundles\` |
 | Whisper models | `%USERPROFILE%\.cache\huggingface\hub` |
@@ -1678,8 +1874,8 @@ asset** (a screen recording is ideal):
     and for the video its length and whether it has audio. Press **Play**
     on the video. Under **Details** add a description to one of them.
     Check in Explorer that nothing was copied next to your files.
-46. The section says automatic B-roll planning is not implemented yet.
-    Pause the preview at a sentence that suits the image, choose the image
+46. (Since stage 3B, open **Placements and corrections** for the manual
+    controls.) Pause the preview at a sentence that suits the image, choose the image
     and **Full-frame cutaway**, **Add at m:ss**. Scrub through: the image
     covers the speaker for 3 s, the speech goes on, captions stay readable on
     a darker band, and when it ends the speaker is back at the same zoom as
@@ -1707,3 +1903,44 @@ asset** (a screen recording is ideal):
 full-frame (`contain`) — switch to `cover` only if cropping is acceptable;
 the picture-in-picture box not covering the face for your framing (change
 the corner or size if it does); captions readable over bright B-roll.
+
+### Automatic B-roll (stage 3B)
+
+**Walkthrough with one Hebrew talking-head video and three described local
+assets** — e.g. a screenshot of a sales chart, a screen recording of the
+product, a team photo — plus one asset left undescribed:
+
+53. In **Asset library**, import the four files. Under **Describe…** give
+    three of them a description in the words you use on camera (e.g.
+    "גרף המכירות של הרבעון"); for the screen recording also add a moment,
+    `0:04-0:10 מסך ההגדרות`. Leave the fourth empty: it shows **Not
+    described**.
+54. Cut the takes, create zooms, **Approve and continue**. The message says
+    B-roll is being planned; the B-roll section shows **Planning B-roll…**
+    with progress. (Without zooms: choose or import the video in B-roll and
+    press **Plan B-roll automatically**.)
+55. The composed preview appears with a summary. Watch it: each B-roll
+    should appear on the sentence it illustrates, last long enough to be
+    understood, keep the speaker on camera most of the time, leave
+    captions readable, and stay silent. The undescribed asset is never used.
+    Open **Placements and corrections**: each placement has its reason and
+    the quoted words.
+56. Correct one thing (remove a placement or change its template). Open
+    **Plan history and details**: revision 2 is *your correction*,
+    revision 1 the *automatic plan*. **Restore** revision 1, then restore
+    revision 2 again.
+57. **Approve and continue**: the B-roll export runs; download and check
+    lip sync and audio.
+58. Press **Plan B-roll automatically** / **Make a new plan** after changing
+    only the caption font: a reused plan, no new request (the job list
+    stays the same). Remove the key from the environment (new terminal) and
+    try on another video: a clear error, nothing sent, **Skip B-roll**
+    still works.
+59. On a video whose topic none of your assets match, the plan should be
+    empty with an explanation; **Approve without B-roll and continue**
+    exports the captioned video unchanged.
+
+**Editorial checklist (yours to judge):** relevance of each choice to the
+words; no "proof by stock image"; no decorative or repetitive overlays;
+enough time to read a screen recording; the hook and personal lines on
+camera.

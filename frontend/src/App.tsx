@@ -1,9 +1,10 @@
 import { useState } from 'react'
+import LibraryScreen from './LibraryScreen'
 import ProjectsScreen from './ProjectsScreen'
 import ToolsPanel from './ToolsPanel'
 import './App.css'
 
-type Tab = 'projects' | 'tools'
+type Tab = 'projects' | 'library' | 'tools'
 
 function App() {
   const [tab, setTab] = useState<Tab>('projects')
@@ -22,6 +23,13 @@ function App() {
           </button>
           <button
             type="button"
+            className={tab === 'library' ? 'tab active' : 'tab'}
+            onClick={() => setTab('library')}
+          >
+            Asset library
+          </button>
+          <button
+            type="button"
             className={tab === 'tools' ? 'tab active' : 'tab'}
             onClick={() => setTab('tools')}
           >
@@ -30,7 +38,11 @@ function App() {
         </nav>
       </header>
 
-      <main>{tab === 'projects' ? <ProjectsScreen /> : <ToolsPanel />}</main>
+      <main>
+        {tab === 'projects' && <ProjectsScreen />}
+        {tab === 'library' && <LibraryScreen />}
+        {tab === 'tools' && <ToolsPanel />}
+      </main>
     </>
   )
 }

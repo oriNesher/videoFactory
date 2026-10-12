@@ -1099,7 +1099,7 @@ export type ZoomApproveResult = {
     | { kind: 'final'; message: string }
     | { kind: 'blocked'; message: string }
     | { kind: 'caption_export'; export: unknown; job: Job | null }
-    | { kind: 'broll'; input_key: string; message: string }
+    | { kind: 'broll'; input_key: string; message: string; planning?: { status: string; job_id: string | null; message: string } }
 }
 
 // --- B-roll (stage 3A) ---------------------------------------------------------
@@ -1115,6 +1115,10 @@ export type BrollLibraryAsset = {
   /** Only ever what the user typed. */
   description: string | null
   tags: string[]
+  /** User-described stretches inside a video asset (stage 3B). */
+  moments: BrollMoment[]
+  /** A description, tags or moments: automatic planning may choose it. */
+  described: boolean
   measured: {
     width: number
     height: number
@@ -1156,14 +1160,76 @@ export type BrollTemplate = {
   defaults: Record<string, unknown>
 }
 
+export type BrollMoment = import('./broll/moments').Moment
+
+export type BrollPlannerProvider = {
+  provider: string
+  label: string
+  model: string
+  is_mock: boolean
+  ready: boolean
+  message: string
+  data_sent: string[]
+  free_tier_note: string | null
+}
+
 export type BrollStatus = {
-  settings: { enabled: boolean; selected_input: string | null }
+  settings: { enabled: boolean; selected_input: string | null; preference: string }
   inputs: CaptionInputListing[]
   selected_input: string | null
   templates: BrollTemplate[]
   default_template: string
   constraints: { min_placement_seconds: number; overlap_rule: string; timeline: string }
   renderer: { ready: boolean; problems: string[] }
+  provider: BrollPlannerProvider
+  preferences: { id: string; description: string }[]
+}
+
+export type BrollPlannerRun = {
+  run_id: string
+  created_at: string
+  summary: string
+  placements: BrollStoredPlacement[]
+  explanations: Record<string, { rationale: string; spoken_text: string | null }>
+  suggestions: { at_seconds: number | null; description: string }[]
+  statistics: { placement_count: number; covered_seconds: number; covered_fraction: number }
+  normalisation: { max_shift_seconds: number; notes: string[] }
+  provider: { label: string; model: string; is_mock: boolean }
+  prompt_version: string
+  preferences: { preference: string; caption_band: string | null }
+  transcript: { transcript_id: string; revision: number; segment_count: number }
+  catalog: {
+    counts: { described: number; undescribed: number; unavailable: number }
+    shortlist: { method: string; offered: number; note: string }
+  }
+  audit: { repair_used: boolean; calls: { attempts: number }[] }
+}
+
+export type BrollPlannerState = {
+  implemented: boolean
+  provider: BrollPlannerProvider
+  catalog: {
+    ready: boolean
+    described_count: number
+    undescribed_count: number
+    unavailable_count: number
+    message: string | null
+  }
+  active_job: ZoomJobSummary | null
+  last_job: ZoomJobSummary | null
+  /** The planning run the current revision comes from, with its explanations. */
+  run: BrollPlannerRun | null
+  /** The planner's result was corrected by hand since. */
+  edited_since: boolean
+}
+
+export type BrollRevisionSummary = {
+  revision: number
+  created_at: string
+  origin: 'manual' | 'planner' | 'restore'
+  note: string | null
+  placement_count: number
+  planner_run_id: string | null
 }
 
 export type BrollStoredPlacement = {
@@ -1180,9 +1246,10 @@ export type BrollPlan = {
   plan_id: string
   revision: number
   created_at: string
-  origin: 'manual' | 'planner'
+  origin: 'manual' | 'planner' | 'restore'
   note: string | null
   placements: BrollStoredPlacement[]
+  planner: { run_id?: string } | null
 }
 
 export type BrollIssue = { index: number | null; placement_id: string | null; message: string }
@@ -1240,5 +1307,6 @@ export type BrollInputState = {
   exports: BrollExportRecord[]
   active_job: ZoomJobSummary | null
   last_job: ZoomJobSummary | null
-  planner: { implemented: boolean; message: string }
+  planner: BrollPlannerState
+  revisions: BrollRevisionSummary[]
 }

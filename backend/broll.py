@@ -59,8 +59,27 @@ PLAN_KIND = "video_factory.broll_plan"
 DECISION_KIND = "video_factory.broll_decision"
 
 ORIGIN_MANUAL = "manual"
-ORIGIN_PLANNER = "planner"  # reserved for stage 3B; validated exactly like manual plans
-ORIGINS = (ORIGIN_MANUAL, ORIGIN_PLANNER)
+ORIGIN_PLANNER = "planner"  # stage 3B (broll_planner_jobs); validated exactly like manual plans
+ORIGIN_RESTORE = "restore"  # an earlier revision brought back as a new one
+ORIGINS = (ORIGIN_MANUAL, ORIGIN_PLANNER, ORIGIN_RESTORE)
+
+# How much B-roll the automatic planner should aim for (stage 3B). Guidance in
+# the prompt, never a number of placements or a rhythm applied to the result.
+PLANNER_PREFERENCES = {
+    "restrained": (
+        "Restrained: add B-roll only where a described asset clearly shows what is being said. "
+        "Long stretches of the speaker on camera are normal and good; no B-roll at all is fine."
+    ),
+    "balanced": (
+        "Balanced: add B-roll wherever a described asset clearly illustrates a specific idea, "
+        "while the speaker stays on camera most of the time."
+    ),
+    "generous": (
+        "Generous: use relevant described assets more often, suited to fast short-form video, "
+        "still only where they match what is said and never as decoration."
+    ),
+}
+DEFAULT_PLANNER_PREFERENCE = "restrained"
 
 OVERLAP_POLICY = "reject"
 MIN_PLACEMENT_SECONDS = 0.2
@@ -116,21 +135,30 @@ def read_settings(project: dict) -> dict:
     block = block if isinstance(block, dict) else {}
     selected = block.get("selected_input")
     enabled = block.get("enabled")
+    preference = block.get("preference")
     return {
         # On by default: an approved zoom result continues to B-roll, where it
-        # can be skipped in one click. Off sends it straight to the export.
+        # is planned automatically and can be skipped in one click. Off sends
+        # it straight to the export.
         "enabled": enabled if isinstance(enabled, bool) else True,
         "selected_input": selected if isinstance(selected, str) else None,
+        "preference": preference if preference in PLANNER_PREFERENCES else DEFAULT_PLANNER_PREFERENCE,
     }
 
 
-def save_settings(project_id: str, *, enabled: Any = None, selected_input: Any = None) -> dict:
+def save_settings(
+    project_id: str, *, enabled: Any = None, selected_input: Any = None, preference: Any = None
+) -> dict:
     project = storage.read_project(project_id)
     current = read_settings(project)
     if enabled is not None:
         if not isinstance(enabled, bool):
             raise BrollError("enabled must be true or false.")
         current["enabled"] = enabled
+    if preference is not None:
+        if preference not in PLANNER_PREFERENCES:
+            raise BrollError("Unknown B-roll preference. Choose one of: %s." % ", ".join(PLANNER_PREFERENCES))
+        current["preference"] = preference
     if selected_input is not None:
         caption_inputs.resolve(project_id, selected_input)
         current["selected_input"] = selected_input
@@ -237,6 +265,27 @@ def read_revision(project_id: str, plan_id: Any, revision: Any) -> dict:
 def latest_revision(project_id: str, plan_id: str) -> dict | None:
     numbers = revision_numbers(project_id, plan_id)
     return read_revision(project_id, plan_id, numbers[-1]) if numbers else None
+
+
+def list_revisions(project_id: str, plan_id: str) -> list[dict]:
+    """Every revision of a plan, newest first, in brief."""
+    listed = []
+    for number in reversed(revision_numbers(project_id, plan_id)):
+        try:
+            document = read_revision(project_id, plan_id, number)
+        except BrollError:
+            continue
+        listed.append(
+            {
+                "revision": document["revision"],
+                "created_at": document.get("created_at"),
+                "origin": document.get("origin"),
+                "note": document.get("note"),
+                "placement_count": len(document.get("placements") or []),
+                "planner_run_id": (document.get("planner") or {}).get("run_id"),
+            }
+        )
+    return listed
 
 
 def list_plans(project_id: str) -> list[dict]:
@@ -411,12 +460,18 @@ def save_plan(
     base_revision: Any,
     origin: str = ORIGIN_MANUAL,
     note: str | None = None,
+    planner: dict | None = None,
 ) -> dict:
     """Validate and store a new immutable revision of the base video's plan.
 
     `base_revision` is the revision the change was made on (0 or None for a
     first plan). Saving on top of anything else is refused, so two tabs, or a
-    tab and a future planner, cannot silently overwrite each other.
+    tab and the planner job, cannot silently overwrite each other.
+
+    `planner` names the automatic planning run a revision comes from
+    (`{"run_id": ...}`). A manual correction on top of it keeps that
+    reference, so the run's explanations stay attached to the placements it
+    made; its `origin` says that a person changed it since.
     """
     if origin not in ORIGINS:
         raise BrollError("Unknown plan origin.")
@@ -449,6 +504,7 @@ def save_plan(
         "overlap_policy": OVERLAP_POLICY,
         "template_catalog_version": broll_templates.TEMPLATE_CATALOG_VERSION,
         "placements": normalised,
+        "planner": planner if planner is not None else (current or {}).get("planner"),
     }
     try:
         storage.write_json_exclusive(_revision_path(project_id, plan_id, revision), document)
@@ -556,6 +612,20 @@ def remove_placement(project_id: str, key: Any, placement_id: Any, *, base_revis
     if len(remaining) == len(placements):
         raise BrollError("That B-roll placement is not in the current plan.", status_code=404)
     return save_plan(project_id, key, remaining, base_revision=base_revision, note="Removed a placement.")
+
+
+def restore_revision(project_id: str, key: Any, revision: Any, *, base_revision: Any) -> dict:
+    """Bring an earlier revision back as the newest one. Nothing is deleted."""
+    described = describe_base(project_id, key)
+    base = base_reference(described)
+    current = find_plan(project_id, base["key"], base["digest"])
+    if current is None:
+        raise BrollError("There is no B-roll plan for this video.", status_code=404)
+    earlier = read_revision(project_id, current["plan_id"], revision)
+    return save_plan(
+        project_id, key, earlier["placements"], base_revision=base_revision, origin=ORIGIN_RESTORE,
+        note="Restored revision %d." % earlier["revision"], planner=earlier.get("planner") or {},
+    )
 
 
 # --- composition ------------------------------------------------------------------
@@ -705,7 +775,9 @@ def review_state(project_id: str, composed: dict) -> dict:
         "approved": valid and decision["decision"] == DECISION_APPROVED,
         "skipped": valid and decision["decision"] == DECISION_SKIPPED,
         "outdated_reason": reason,
-        "can_approve": not composed["issues"] and bool(composed["placements"]),
+        # A plan with no placements (a reviewed "no B-roll" result) can be
+        # approved too; with no plan at all there is nothing to approve.
+        "can_approve": not composed["issues"] and composed["plan"] is not None,
     }
 
 
@@ -717,8 +789,8 @@ def decide(project_id: str, key: Any, *, decision: str, composition_digest: Any)
     if decision == DECISION_APPROVED:
         if composed["issues"]:
             raise BrollError("Fix the B-roll problems listed first: %s" % composed["issues"][0]["message"], status_code=409)
-        if not composed["placements"]:
-            raise BrollError("There is no B-roll to approve. Add some, or skip B-roll.", status_code=409)
+        if composed["plan"] is None:
+            raise BrollError("There is no B-roll plan to approve yet. Plan or add B-roll, or skip B-roll.", status_code=409)
     elif decision != DECISION_SKIPPED:
         raise BrollError("Unknown decision.")
     document = {

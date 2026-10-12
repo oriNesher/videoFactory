@@ -16,6 +16,8 @@ from . import (
     broll,
     broll_jobs,
     broll_library,
+    broll_planner,
+    broll_planner_jobs,
     broll_templates,
     caption_inputs,
     caption_jobs,
@@ -28,6 +30,8 @@ from .models import (
     BrollDecisionRequest,
     BrollImportRequest,
     BrollPlanRequest,
+    BrollPlanStartRequest,
+    BrollRevisionRequest,
     BrollSettingsRequest,
     BrollUpdatePlacementRequest,
 )
@@ -123,12 +127,17 @@ def status(project_id: str):
         **broll_templates.catalog(),
         "constraints": broll.constraints(),
         "renderer": caption_jobs.renderer_status(),
+        "provider": broll_planner.provider_status(),
+        "preferences": [{"id": key, "description": value} for key, value in broll.PLANNER_PREFERENCES.items()],
     }
 
 
 @router.put("/settings")
 def save_settings(project_id: str, request: BrollSettingsRequest):
-    return _call(broll.save_settings, project_id, enabled=request.enabled, selected_input=request.selected_input)
+    return _call(
+        broll.save_settings, project_id,
+        enabled=request.enabled, selected_input=request.selected_input, preference=request.preference,
+    )
 
 
 @router.get("/catalog")
@@ -150,7 +159,9 @@ def _continuation(project_id: str, key: str, decision: dict | None) -> dict | No
     """What followed the latest valid decision: an export, or the base as final."""
     if decision is None:
         return None
-    if decision["decision"] == broll.DECISION_APPROVED:
+    # An approved plan with no placements continues exactly like a skip: the
+    # unchanged picture goes on to the captions export (or is final).
+    if decision["decision"] == broll.DECISION_APPROVED and decision.get("placement_count"):
         for record in broll_jobs.list_exports(project_id):
             if record.get("composition_digest") == decision["composition_digest"] and record.get("status") in (
                 caption_jobs.EXPORT_RUNNING, caption_jobs.EXPORT_SUCCEEDED,
@@ -168,7 +179,14 @@ def _continuation(project_id: str, key: str, decision: dict | None) -> dict | No
 
     reference = decision.get("captions")
     if reference is None:
-        return {"kind": "final", "message": "B-roll skipped. The video itself is the finished file."}
+        return {
+            "kind": "final",
+            "message": (
+                "Approved with no B-roll. The video itself is the finished file."
+                if decision["decision"] == broll.DECISION_APPROVED
+                else "B-roll skipped. The video itself is the finished file."
+            ),
+        }
     for record in caption_jobs.list_exports(project_id):
         if (
             record.get("input_key") == key
@@ -186,6 +204,23 @@ def _continuation(project_id: str, key: str, decision: dict | None) -> dict | No
         ):
             return {"kind": "caption_export", "export": None, "job": _job_summary(record)}
     return None
+
+
+def _planner_state(project_id: str, key: str, plan: dict | None) -> dict:
+    """Automatic planning as the panel shows it. Reading this never calls a provider."""
+    run = broll_planner_jobs.current_run(project_id, plan)
+    active = broll_planner_jobs.active_job(project_id, key)
+    last = broll_planner_jobs.last_job(project_id, key)
+    return {
+        "implemented": True,
+        "provider": broll_planner.provider_status(),
+        "catalog": _call(broll_planner_jobs.catalog_readiness),
+        "active_job": _job_summary(active),
+        "last_job": _job_summary(last),
+        # The run the current plan revision comes from, with its explanations.
+        "run": broll_planner_jobs.public_run(run),
+        "edited_since": bool(run) and (plan or {}).get("origin") != broll.ORIGIN_PLANNER,
+    }
 
 
 @router.get("/inputs/{input_key}")
@@ -222,13 +257,8 @@ def describe_input(project_id: str, input_key: str):
         "exports": exports,
         "active_job": _job_summary(active),
         "last_job": _job_summary(last),
-        "planner": {
-            "implemented": False,
-            "message": (
-                "Automatic B-roll planning (choosing assets and timing from the script) is not "
-                "implemented yet; it is the next stage. Add B-roll by hand below, or skip B-roll."
-            ),
-        },
+        "planner": _planner_state(project_id, input_key, None),
+        "revisions": [],
     }
     if not described["available"] or described["fingerprint"] is None:
         return state
@@ -236,6 +266,10 @@ def describe_input(project_id: str, input_key: str):
     composed = _call(broll.compose, project_id, input_key)
     review = broll.review_state(project_id, composed)
     digest = composed["base"]["digest"]
+    state.update(
+        planner=_planner_state(project_id, input_key, composed["plan"]),
+        revisions=broll.list_revisions(project_id, composed["plan"]["plan_id"]) if composed["plan"] else [],
+    )
     state.update(
         available=True,
         unavailable_reason=None,
@@ -304,11 +338,17 @@ def validate_plan(project_id: str, input_key: str, request: BrollPlanRequest):
 
 @router.post("/inputs/{input_key}/approve")
 def approve(project_id: str, input_key: str, request: BrollDecisionRequest):
-    """Approve exactly the reviewed composition, then export it."""
+    """Approve exactly the reviewed composition, then export it.
+
+    A reviewed plan with no placements is approved as "no B-roll" and
+    continues like a skip, to the existing captions export.
+    """
     _call(storage.read_project, project_id)
     decision, _composed = _call(
         broll.decide, project_id, input_key, decision=broll.DECISION_APPROVED, composition_digest=request.composition_digest
     )
+    if not decision["placement_count"]:
+        return _continue_without_broll(project_id, input_key, decision)
     existing = _continuation(project_id, input_key, decision)
     if existing is not None and (existing.get("job") or (existing.get("export") or {}).get("status") in (
         caption_jobs.EXPORT_RUNNING, caption_jobs.EXPORT_SUCCEEDED,
@@ -331,6 +371,11 @@ def skip(project_id: str, input_key: str, request: BrollDecisionRequest):
     decision, _composed = _call(
         broll.decide, project_id, input_key, decision=broll.DECISION_SKIPPED, composition_digest=request.composition_digest
     )
+    return _continue_without_broll(project_id, input_key, decision)
+
+
+def _continue_without_broll(project_id: str, input_key: str, decision: dict) -> dict:
+    """The unchanged picture continues: the captions export, or the file itself."""
     existing = _continuation(project_id, input_key, decision)
     if existing is not None and existing["kind"] == "final":
         return {"decision": decision, "next": existing}
@@ -346,8 +391,55 @@ def skip(project_id: str, input_key: str, request: BrollDecisionRequest):
              "format": caption_jobs.FORMAT_MP4, "input_key": input_key},
         )
     except storage.ProjectError as error:
-        return {"decision": decision, "next": {"kind": "blocked", "message": "Skipped, but the captioned export could not start: %s" % error.message}}
+        return {"decision": decision, "next": {"kind": "blocked", "message": "Decided, but the captioned export could not start: %s" % error.message}}
     return {"decision": decision, "next": {"kind": "caption_export", "export": None, "job": _job_summary(record)}}
+
+
+# --- automatic planning (stage 3B) -------------------------------------------------
+
+
+@router.post("/inputs/{input_key}/planner/runs", status_code=201)
+def start_planning(project_id: str, input_key: str, request: BrollPlanStartRequest):
+    """Plan B-roll automatically. Idempotent: a running job for this video is
+    returned, and an unedited plan for exactly today's inputs is returned
+    without asking the provider again (unless `force_replan`)."""
+    _call(storage.read_project, project_id)
+    active = broll_planner_jobs.active_job(project_id, input_key)
+    if active is not None:
+        return {"job": _job_summary(active), "reused": None}
+    if request.force_replan is not True:
+        reused = broll_planner_jobs.reusable_result(project_id, input_key)
+        if reused is not None:
+            return {"job": None, "reused": broll_planner_jobs.public_run(reused)}
+    record = _call(
+        jobs.submit, project_id, broll_planner_jobs.PLAN_JOB,
+        {"input_key": input_key, "force_replan": request.force_replan is True, "replace_current": request.replace_current is True},
+    )
+    return {"job": _job_summary(record), "reused": None}
+
+
+@router.get("/planner/runs/{run_id}")
+def get_planning_run(project_id: str, run_id: str):
+    """A stored planning run, including exactly what was sent to the provider."""
+    _call(storage.read_project, project_id)
+    return _call(broll_planner_jobs.read_run, project_id, run_id)
+
+
+@router.post("/inputs/{input_key}/planner/runs/{run_id}/apply", status_code=201)
+def apply_planning_run(project_id: str, input_key: str, run_id: str, request: BrollRevisionRequest):
+    """Use a planning run that was kept but not applied (or an earlier one) as a new revision."""
+    _call(storage.read_project, project_id)
+    run = _call(broll_planner_jobs.read_run, project_id, run_id)
+    if run["base"]["key"] != input_key:
+        raise HTTPException(status_code=404, detail="That plan belongs to another video.")
+    return _call(broll_planner_jobs.apply_run, project_id, run, base_revision=request.base_revision)
+
+
+@router.post("/inputs/{input_key}/plan/restore/{revision}", status_code=201)
+def restore_revision(project_id: str, input_key: str, revision: int, request: BrollRevisionRequest):
+    """Bring an earlier revision back as the newest one. Nothing is deleted."""
+    _call(storage.read_project, project_id)
+    return _call(broll.restore_revision, project_id, input_key, revision, base_revision=request.base_revision)
 
 
 @router.get("/inputs/{input_key}/video")

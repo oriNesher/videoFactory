@@ -178,6 +178,20 @@ class BrollImportRequest(BaseModel):
 class BrollSettingsRequest(BaseModel):
     enabled: Any = None
     selected_input: Any = None
+    preference: Any = None
+
+
+class BrollPlanStartRequest(BaseModel):
+    # Ask the provider again even though a plan exists for the same inputs.
+    force_replan: Any = None
+    # Required (true) when the video already has a plan: the new plan becomes
+    # a new revision and the current one is kept.
+    replace_current: Any = None
+
+
+class BrollRevisionRequest(BaseModel):
+    # The revision the screen showed when the user acted.
+    base_revision: Any = None
 
 
 class BrollAddPlacementRequest(BaseModel):
