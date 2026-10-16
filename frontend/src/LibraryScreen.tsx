@@ -1,19 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { brollAssetMediaUrl, getBrollLibrary, remeasureBrollAsset, updateBrollAsset } from './api'
-import { AssetEditor, AssetImport, AssetStatus, AssetThumb } from './BrollLibrary'
+import { brollAssetMediaUrl, getBrollLibrary, listProjects, moveBrollAsset, updateBrollAsset } from './api'
+import { AssetEditor, AssetImport, AssetStatus, AssetThumb, RemeasureButton } from './BrollLibrary'
 import { type Act, errorText, splitTags, useLibraryActions } from './broll/libraryActions'
 import { filterAssets, NO_FILTER, needsDescription, type LibraryFilter } from './broll/libraryFilter'
 import { describeAsset } from './brollFormat'
 import type { BrollLibraryAsset } from './types'
 
 type Library = { assets: BrollLibraryAsset[]; storage_note: string }
+type Video = { id: string; name: string }
+
+/** The general library, or one video's own. */
+type Scope = string | null
 
 /**
- * The B-roll asset library on its own page: every asset at a glance, importing,
- * a queue of assets that still need a description, and a full editor for one
- * asset at a time. The same workspace-wide library the B-roll panel uses.
+ * The B-roll asset libraries on their own page, one at a time: the general
+ * library every video uses, or one video's own. Every asset at a glance,
+ * importing, a queue of assets that still need a description, and a full
+ * editor for one asset at a time.
  */
 export default function LibraryScreen() {
+  const [videos, setVideos] = useState<Video[]>([])
+  const [scope, setScope] = useState<Scope>(null)
   const [library, setLibrary] = useState<Library | null>(null)
   const [loadError, setLoadError] = useState('')
   const [filter, setFilter] = useState<LibraryFilter>(NO_FILTER)
@@ -22,16 +29,24 @@ export default function LibraryScreen() {
 
   const load = useCallback(async () => {
     try {
-      setLibrary(await getBrollLibrary())
+      setLibrary(await getBrollLibrary(scope, true))
       setLoadError('')
     } catch (caught) {
       setLoadError(errorText(caught, 'Loading the library failed.'))
     }
-  }, [])
+  }, [scope])
 
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    listProjects()
+      .then((listing) =>
+        setVideos(listing.projects.filter((entry) => entry.error === null).map(({ id, name }) => ({ id, name }))),
+      )
+      .catch(() => setVideos([]))
+  }, [])
 
   useEffect(() => {
     document.title = 'Asset library'
@@ -47,6 +62,14 @@ export default function LibraryScreen() {
   const attention = assets.filter((asset) => asset.status !== 'available').length
   const shown = filterAssets(assets, filter)
   const selected = assets.find((asset) => asset.id === selectedId) ?? null
+  const videoName = videos.find((video) => video.id === scope)?.name
+
+  function choose(next: Scope) {
+    setScope(next)
+    setLibrary(null)
+    setSelectedId(null)
+    setMessage(null)
+  }
 
   function select(assetId: string) {
     setSelectedId(assetId)
@@ -68,11 +91,37 @@ export default function LibraryScreen() {
             </span>
           )}
         </div>
+
+        <label className="library-scope">
+          <span>Library</span>
+          <select value={scope ?? ''} onChange={(event) => choose(event.target.value || null)} disabled={busy}>
+            <option value="">General — shared by all videos</option>
+            {videos.length > 0 && (
+              <optgroup label="One video's own">
+                {videos.map((video) => (
+                  <option key={video.id} value={video.id}>
+                    {video.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </label>
         <p className="hint">
-          Images and videos for B-roll, shared by every video. Automatic planning only chooses assets you have
-          described.
+          {scope === null
+            ? 'Every video can use these. Automatic planning only chooses assets you have described.'
+            : `Only "${videoName ?? 'this video'}" can use these, alongside the general library. Automatic planning only chooses assets you have described.`}
         </p>
-        <AssetImport storageNote={library?.storage_note ?? ''} busy={busy} act={act} setMessage={setMessage} />
+
+        <AssetImport
+          key={scope ?? 'general'}
+          projectId={scope}
+          chooseLibrary={false}
+          storageNote={library?.storage_note ?? ''}
+          busy={busy}
+          act={act}
+          setMessage={setMessage}
+        />
         {message && <p className={`message ${message.kind}`}>{message.text}</p>}
         {loadError && <p className="message error">{loadError}</p>}
       </section>
@@ -86,7 +135,14 @@ export default function LibraryScreen() {
           </p>
           <ul>
             {undescribed.map((asset) => (
-              <DescribeRow key={asset.id} asset={asset} busy={busy} act={act} onOpen={() => select(asset.id)} />
+              <DescribeRow
+                key={asset.id}
+                asset={asset}
+                scope={scope}
+                busy={busy}
+                act={act}
+                onOpen={() => select(asset.id)}
+              />
             ))}
           </ul>
         </section>
@@ -127,7 +183,11 @@ export default function LibraryScreen() {
 
           {!library && !loadError && <p className="hint">Loading…</p>}
           {library && assets.length === 0 && (
-            <p className="hint">The library is empty. Import screen recordings, clips or images to use as B-roll.</p>
+            <p className="hint">
+              {scope === null
+                ? 'The general library is empty. Import screen recordings, clips or images to use as B-roll.'
+                : 'This video has no assets of its own yet. Import some here, or from the B-roll section of the video.'}
+            </p>
           )}
           {assets.length > 0 && shown.length === 0 && <p className="hint">No asset matches.</p>}
 
@@ -144,7 +204,7 @@ export default function LibraryScreen() {
                   onClick={() => (asset.id === selectedId ? setSelectedId(null) : select(asset.id))}
                   aria-pressed={asset.id === selectedId}
                 >
-                  <AssetThumb asset={asset} />
+                  <AssetThumb asset={asset} projectId={scope} />
                   <strong className="broll-name" title={asset.filename}>
                     {asset.display_name}
                   </strong>
@@ -179,20 +239,19 @@ export default function LibraryScreen() {
                 ✕
               </button>
             </div>
-            <AssetPreview asset={selected} />
+            <AssetPreview asset={selected} scope={scope} />
             <p className="small">{describeAsset(selected)}</p>
             <AssetStatus asset={selected} />
-            {selected.status === 'changed' && (
-              <button
-                type="button"
-                onClick={() => void act(async () => void (await remeasureBrollAsset(selected.id)), 'Re-measuring failed.')}
-                disabled={busy}
-              >
-                Re-measure
-              </button>
-            )}
+            {selected.status === 'changed' && <RemeasureButton asset={selected} projectId={scope} busy={busy} act={act} />}
             {/* Keyed so the form starts from the saved words of whichever asset is open. */}
-            <AssetEditor key={`${selected.id}-${selected.fingerprint.digest}`} asset={selected} busy={busy} act={act} />
+            <AssetEditor
+              key={`${selected.id}-${selected.fingerprint.digest}`}
+              asset={selected}
+              projectId={scope}
+              busy={busy}
+              act={act}
+            />
+            {scope === null && <MoveToVideo asset={selected} videos={videos} busy={busy} act={act} />}
           </aside>
         )}
       </div>
@@ -205,9 +264,9 @@ function statusWord(asset: BrollLibraryAsset): string {
 }
 
 /** The file itself where it can be shown, the thumbnail otherwise. */
-function AssetPreview({ asset }: { asset: BrollLibraryAsset }) {
-  if (asset.status !== 'available') return <AssetThumb asset={asset} />
-  const url = brollAssetMediaUrl(asset.id, asset.fingerprint.digest)
+function AssetPreview({ asset, scope }: { asset: BrollLibraryAsset; scope: Scope }) {
+  if (asset.status !== 'available') return <AssetThumb asset={asset} projectId={scope} />
+  const url = brollAssetMediaUrl(asset.id, asset.fingerprint.digest, scope)
   return (
     <div className="broll-thumb library-preview">
       {asset.media_type === 'video' ? <video src={url} controls muted preload="metadata" /> : <img src={url} alt="" />}
@@ -215,14 +274,63 @@ function AssetPreview({ asset }: { asset: BrollLibraryAsset }) {
   )
 }
 
+/** Take a general asset out of the general library and give it to one video. */
+function MoveToVideo({
+  asset,
+  videos,
+  busy,
+  act,
+}: {
+  asset: BrollLibraryAsset
+  videos: Video[]
+  busy: boolean
+  act: Act
+}) {
+  const [videoId, setVideoId] = useState('')
+  if (videos.length === 0) return null
+  const name = videos.find((video) => video.id === videoId)?.name
+  return (
+    <div className="move-to-video">
+      <span className="small">Only one video needs it?</span>
+      <div className="row">
+        <select value={videoId} onChange={(event) => setVideoId(event.target.value)} aria-label="Video to move it to">
+          <option value="">Choose a video…</option>
+          {videos.map((video) => (
+            <option key={video.id} value={video.id}>
+              {video.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy || !videoId}
+          onClick={() => {
+            if (
+              !window.confirm(
+                `Move "${asset.display_name}" into "${name}"'s own library? Other videos can no longer use it, and their B-roll plans that do will report it as missing.`,
+              )
+            )
+              return
+            void act(async () => void (await moveBrollAsset(asset.id, videoId, 'project')), 'Moving failed.')
+          }}
+        >
+          Move to that video
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /** One asset in the "description needed" queue: describe it in place. */
 function DescribeRow({
   asset,
+  scope,
   busy,
   act,
   onOpen,
 }: {
   asset: BrollLibraryAsset
+  scope: Scope
   busy: boolean
   act: Act
   onOpen: () => void
@@ -234,13 +342,13 @@ function DescribeRow({
   function save() {
     if (empty) return
     void act(async () => {
-      await updateBrollAsset(asset.id, { description: description.trim() || null, tags: splitTags(tags) })
+      await updateBrollAsset(asset.id, { description: description.trim() || null, tags: splitTags(tags) }, scope)
     }, 'Saving failed.')
   }
 
   return (
     <li className="describe-row">
-      <AssetThumb asset={asset} />
+      <AssetThumb asset={asset} projectId={scope} />
       <div className="describe-info">
         <strong className="broll-name" title={asset.filename}>
           {asset.display_name}

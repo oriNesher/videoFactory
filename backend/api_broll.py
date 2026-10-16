@@ -1,9 +1,11 @@
 """B-roll endpoints (stage 3A).
 
-Two routers. `/broll/...` is the workspace-wide asset library, shared by
-every project. `/projects/{id}/broll/...` is one project's plans, review and
-export. As everywhere: the browser names ids and keys, never paths; reading
-state renders nothing; anything slow is a queued job.
+Two routers. `/broll/...` is the general asset library, shared by every
+project. `/projects/{id}/broll/...` is one project's plans, review and
+export, and its library view: the project's own assets plus the general
+ones (`/projects/{id}/broll/library/...`). An asset is reachable only through
+a project that may see it. As everywhere: the browser names ids and keys,
+never paths; reading state renders nothing; anything slow is a queued job.
 """
 
 import urllib.parse
@@ -29,6 +31,7 @@ from .models import (
     BrollAddPlacementRequest,
     BrollDecisionRequest,
     BrollImportRequest,
+    BrollMoveRequest,
     BrollPlanRequest,
     BrollPlanStartRequest,
     BrollRevisionRequest,
@@ -91,22 +94,82 @@ def remove_asset(asset_id: str):
     return _call(broll_library.remove, asset_id)
 
 
+def _media_response(path, content_type: str) -> FileResponse:
+    return FileResponse(path, media_type=content_type, headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"})
+
+
+def _thumbnail_response(path) -> FileResponse:
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @library_router.get("/library/{asset_id}/media")
 def asset_media(asset_id: str):
-    path, content_type = _call(broll_library.media_file, asset_id)
-    return FileResponse(path, media_type=content_type, headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"})
+    return _media_response(*_call(broll_library.media_file, asset_id))
 
 
 @library_router.get("/library/{asset_id}/thumbnail")
 def asset_thumbnail(asset_id: str):
-    path = _call(broll_library.thumbnail_file, asset_id)
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+    return _thumbnail_response(_call(broll_library.thumbnail_file, asset_id))
 
 
 @library_router.get("/catalog")
 def get_catalog():
     """Templates, constraints and assets as a planner will see them: no paths, no filenames."""
     return _call(broll.catalog)
+
+
+# --- one project's library view -------------------------------------------------------
+
+
+@router.get("/library")
+def get_project_library(project_id: str, own_only: bool = False):
+    """The project's own assets and the general ones (or with `own_only`, its own alone)."""
+    _call(storage.read_project, project_id)
+    return {
+        "assets": _call(broll_library.list_public, project_id, own_only=own_only),
+        "storage": "referenced",
+        "storage_note": STORAGE_NOTE,
+    }
+
+
+@router.post("/library/imports", status_code=201)
+def import_project_asset(project_id: str, request: BrollImportRequest):
+    """Add an image or video to this project's own library. No path opens the file dialog."""
+    _call(storage.read_project, project_id)
+    if request.path is None:
+        return _call(broll_library.choose_and_import, project_id)
+    return _call(broll_library.import_asset, request.path, project_id)
+
+
+@router.patch("/library/{asset_id}")
+def update_project_asset(project_id: str, asset_id: str, changes: dict[str, Any] = Body(...)):
+    return _call(broll_library.update_details, asset_id, changes, project_id)
+
+
+@router.post("/library/{asset_id}/remeasure")
+def remeasure_project_asset(project_id: str, asset_id: str):
+    return _call(broll_library.remeasure, asset_id, project_id)
+
+
+@router.delete("/library/{asset_id}")
+def remove_project_asset(project_id: str, asset_id: str):
+    return _call(broll_library.remove, asset_id, project_id)
+
+
+@router.post("/library/{asset_id}/move")
+def move_project_asset(project_id: str, asset_id: str, request: BrollMoveRequest):
+    """Share one of this project's assets with every project, or make a general asset this project's alone."""
+    return _call(broll_library.move, asset_id, project_id, request.to)
+
+
+@router.get("/library/{asset_id}/media")
+def project_asset_media(project_id: str, asset_id: str):
+    return _media_response(*_call(broll_library.media_file, asset_id, project_id))
+
+
+@router.get("/library/{asset_id}/thumbnail")
+def project_asset_thumbnail(project_id: str, asset_id: str):
+    return _thumbnail_response(_call(broll_library.thumbnail_file, asset_id, project_id))
 
 
 # --- one project ------------------------------------------------------------------
@@ -143,7 +206,7 @@ def save_settings(project_id: str, request: BrollSettingsRequest):
 @router.get("/catalog")
 def project_catalog(project_id: str, input_key: str | None = None):
     _call(storage.read_project, project_id)
-    return _call(broll.catalog, project_id if input_key else None, input_key)
+    return _call(broll.catalog, project_id, input_key)
 
 
 def _job_summary(record: dict | None) -> dict | None:
@@ -214,7 +277,7 @@ def _planner_state(project_id: str, key: str, plan: dict | None) -> dict:
     return {
         "implemented": True,
         "provider": broll_planner.provider_status(),
-        "catalog": _call(broll_planner_jobs.catalog_readiness),
+        "catalog": _call(broll_planner_jobs.catalog_readiness, project_id),
         "active_job": _job_summary(active),
         "last_job": _job_summary(last),
         # The run the current plan revision comes from, with its explanations.
@@ -331,7 +394,7 @@ def validate_plan(project_id: str, input_key: str, request: BrollPlanRequest):
     """Check placements against the video and the library. Writes nothing."""
     described = _call(broll.describe_base, project_id, input_key)
     placements, errors = broll.validate_placements(
-        request.placements, broll.base_reference(described), broll.library_index()
+        request.placements, broll.base_reference(described), broll.library_index(project_id)
     )
     return {"placements": placements, "errors": errors, "valid": not errors}
 

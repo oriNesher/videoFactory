@@ -74,8 +74,8 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   }, [projectId])
 
   const loadLibrary = useCallback(async () => {
-    setLibrary(await getBrollLibrary())
-  }, [])
+    setLibrary(await getBrollLibrary(projectId))
+  }, [projectId])
 
   useEffect(() => {
     let cancelled = false
@@ -167,7 +167,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
               ...placement,
               asset: {
                 ...placement.asset,
-                src: brollAssetMediaUrl(placement.asset.id, state.assets[placement.asset.id]?.fingerprint.digest ?? ''),
+                src: brollAssetMediaUrl(placement.asset.id, state.assets[placement.asset.id]?.fingerprint.digest ?? '', projectId),
               },
             })),
           }
@@ -525,10 +525,11 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
         onToggle={(event) => setLibraryOpen((event.target as HTMLDetailsElement).open)}
       >
         <summary>
-          Asset library ({library.assets.length}) — shared by all projects
+          Asset library ({library.assets.length}) — this video's own and the general library
           {library.assets.some((asset) => !asset.described) ? ' · some assets need a description' : ''}
         </summary>
         <BrollLibrary
+          projectId={projectId}
           assets={library.assets}
           storageNote={library.storage_note}
           onChanged={async () => {

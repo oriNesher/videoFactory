@@ -501,6 +501,8 @@ export type CuttingJobSummary = {
   finished_at: string | null
   error: string | null
   result: Record<string, unknown> | null
+  /** The previews a preview job renders; null or absent for other jobs. */
+  samples?: SampleRequest[] | null
 }
 
 /** The cutting screen's live state for the form as it stands. */
@@ -1108,6 +1110,8 @@ export type BrollAssetStatus = 'available' | 'missing' | 'changed' | 'unsupporte
 
 export type BrollLibraryAsset = {
   id: string
+  /** `general`: shared by every video. `project`: one video's own. */
+  library: 'general' | 'project'
   media_type: 'image' | 'video'
   filename: string
   display_name: string

@@ -306,7 +306,7 @@ def test_invalid_placements_are_refused_with_a_reason(client, ready, build, frag
 def test_non_finite_times_are_refused(ready):
     base = {"duration_seconds": 4.0}
     for bad in (float("nan"), float("inf"), True, None):
-        _placements, errors = broll.validate_placements([placement(ready["image"], bad, 1.5)], base, broll.library_index())
+        _placements, errors = broll.validate_placements([placement(ready["image"], bad, 1.5)], base, broll.library_index(ready["project"]))
         assert errors and "finite" in errors[0]["message"], bad
 
 
@@ -661,3 +661,80 @@ def test_an_export_renders_its_snapshot_and_can_be_cancelled(client, project, tm
     assert cancelled["status"] == "cancelled" and not cancelled["downloadable"]
     assert not any(path.suffix == ".mp4" for path in directory.iterdir())
     assert os.path.isfile(long_video)
+
+
+# --- per-video libraries -------------------------------------------------------------
+
+
+def import_to_project(client, project_id, path) -> dict:
+    response = client.post(f"/projects/{project_id}/broll/library/imports", json={"path": str(path)})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def ids_seen(client, project_id=None, own_only=False) -> set[str]:
+    url = f"/projects/{project_id}/broll/library" if project_id else "/broll/library"
+    response = client.get(url, params={"own_only": own_only} if project_id else None)
+    assert response.status_code == 200, response.text
+    return {asset["id"] for asset in response.json()["assets"]}
+
+
+def test_a_videos_own_assets_are_visible_to_that_video_only(client, ready, media_dir):
+    other = client.post("/projects", json={"name": "אחר"}).json()["id"]
+    own = import_to_project(client, ready["project"], make_image(media_dir / "פרטי.png", colour="green"))
+    assert own["duplicate"] is False and own["asset"]["library"] == "project"
+    own_id = own["asset"]["id"]
+
+    # Stored in the video's own folder, with its thumbnail beside it.
+    root = broll_library.library_root(ready["project"])
+    assert root.parent.name == ready["project"]
+    assert any(path.name.startswith(own_id) for path in (root / "thumbnails").iterdir())
+
+    general = {ready["image"], ready["clip"]}
+    assert ids_seen(client) == general
+    assert ids_seen(client, ready["project"]) == general | {own_id}
+    assert ids_seen(client, ready["project"], own_only=True) == {own_id}
+    assert ids_seen(client, other) == general
+
+    # Usable by its own video, unreachable from anywhere else.
+    assert validate(client, ready, [placement(own_id, 0.5, 1.5)])["valid"]
+    assert client.get(f"/projects/{ready['project']}/broll/library/{own_id}/thumbnail").status_code == 200
+    assert client.get(f"/projects/{ready['project']}/broll/library/{own_id}/media").status_code == 200
+    for url in (f"/broll/library/{own_id}/media", f"/projects/{other}/broll/library/{own_id}/media",
+                f"/projects/{other}/broll/library/{own_id}/thumbnail"):
+        assert client.get(url).status_code == 404, url
+    assert client.patch(f"/projects/{other}/broll/library/{own_id}", json={"description": "x"}).status_code == 404
+    assert client.delete(f"/projects/{other}/broll/library/{own_id}").status_code == 404
+    catalog = client.get(f"/projects/{other}/broll/catalog").json()
+    assert own_id not in {asset["asset_id"] for asset in catalog["assets"]}
+
+    # A video edits general assets through its own view, too.
+    edited = client.patch(f"/projects/{ready['project']}/broll/library/{ready['image']}", json={"description": "אדום"})
+    assert edited.status_code == 200 and edited.json()["library"] == "general"
+
+
+def test_a_file_the_video_already_sees_is_not_imported_again(client, ready, image):
+    again = import_to_project(client, ready["project"], image)
+    assert again["duplicate"] is True and again["asset"]["id"] == ready["image"]
+    assert ids_seen(client, ready["project"], own_only=True) == set()
+
+
+def test_moving_an_asset_between_a_video_and_the_general_library_keeps_its_id(client, ready, media_dir):
+    other = client.post("/projects", json={"name": "אחר"}).json()["id"]
+    own_id = import_to_project(client, ready["project"], make_image(media_dir / "משותף.png", colour="yellow"))["asset"]["id"]
+    move = f"/projects/{ready['project']}/broll/library/{own_id}/move"
+
+    shared = client.post(move, json={"to": "general"})
+    assert shared.status_code == 200 and shared.json()["library"] == "general" and shared.json()["id"] == own_id
+    assert own_id in ids_seen(client, other) and own_id in ids_seen(client)
+    assert client.get(f"/projects/{other}/broll/library/{own_id}/thumbnail").status_code == 200
+    assert validate(client, ready, [placement(own_id, 0.5, 1.5)])["valid"]
+
+    # A general asset made private to the other video.
+    private = client.post(f"/projects/{other}/broll/library/{own_id}/move", json={"to": "project"})
+    assert private.status_code == 200 and private.json()["library"] == "project"
+    assert own_id not in ids_seen(client, ready["project"]) and own_id in ids_seen(client, other, own_only=True)
+    assert not validate(client, ready, [placement(own_id, 0.5, 1.5)])["valid"]
+
+    assert client.post(move, json={"to": "general"}).status_code == 404  # not visible to this video any more
+    assert client.post(f"/projects/{other}/broll/library/{own_id}/move", json={"to": "elsewhere"}).status_code == 400

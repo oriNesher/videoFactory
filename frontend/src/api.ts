@@ -622,14 +622,24 @@ export function zoomVideoUrl(projectId: string, runId: string, download = false)
 
 // --- B-roll (stage 3A) ----------------------------------------------------------
 
-/** The workspace-wide asset library, shared by every project. */
-export function getBrollLibrary() {
-  return request<{ assets: BrollLibraryAsset[]; storage_note: string }>(`/broll/library`)
+/**
+ * Asset libraries. Without a project: the general library, shared by every
+ * video. With one: what that video sees — its own assets and the general
+ * ones. An asset is reached through a video that may see it.
+ */
+const libraryBase = (projectId: string | null = null) =>
+  projectId ? `/projects/${projectId}/broll/library` : '/broll/library'
+
+/** With `ownOnly`, just the video's own assets. */
+export function getBrollLibrary(projectId: string | null = null, ownOnly = false) {
+  return request<{ assets: BrollLibraryAsset[]; storage_note: string }>(
+    `${libraryBase(projectId)}${projectId && ownOnly ? '?own_only=true' : ''}`,
+  )
 }
 
-/** No path opens the machine's file dialog on the backend. */
-export function importBrollAsset(path: string | null) {
-  return request<{ cancelled: boolean; asset: BrollLibraryAsset | null; duplicate: boolean }>(`/broll/library/imports`, {
+/** Into the video's own library, or the general one. No path opens the machine's file dialog on the backend. */
+export function importBrollAsset(path: string | null, projectId: string | null = null) {
+  return request<{ cancelled: boolean; asset: BrollLibraryAsset | null; duplicate: boolean }>(`${libraryBase(projectId)}/imports`, {
     method: 'POST',
     body: JSON.stringify({ path }),
   })
@@ -638,25 +648,34 @@ export function importBrollAsset(path: string | null) {
 export function updateBrollAsset(
   assetId: string,
   changes: { display_name?: string | null; description?: string | null; tags?: string[]; moments?: BrollMoment[] },
+  projectId: string | null = null,
 ) {
-  return request<BrollLibraryAsset>(`/broll/library/${assetId}`, { method: 'PATCH', body: JSON.stringify(changes) })
+  return request<BrollLibraryAsset>(`${libraryBase(projectId)}/${assetId}`, { method: 'PATCH', body: JSON.stringify(changes) })
 }
 
-export function remeasureBrollAsset(assetId: string) {
-  return request<BrollLibraryAsset>(`/broll/library/${assetId}/remeasure`, { method: 'POST' })
+export function remeasureBrollAsset(assetId: string, projectId: string | null = null) {
+  return request<BrollLibraryAsset>(`${libraryBase(projectId)}/${assetId}/remeasure`, { method: 'POST' })
 }
 
-export function removeBrollAsset(assetId: string) {
-  return request<{ removed: string }>(`/broll/library/${assetId}`, { method: 'DELETE' })
+export function removeBrollAsset(assetId: string, projectId: string | null = null) {
+  return request<{ removed: string }>(`${libraryBase(projectId)}/${assetId}`, { method: 'DELETE' })
+}
+
+/** `general`: share with every video. `project`: this video's alone. */
+export function moveBrollAsset(assetId: string, projectId: string, to: BrollLibraryAsset['library']) {
+  return request<BrollLibraryAsset>(`${libraryBase(projectId)}/${assetId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ to }),
+  })
 }
 
 /** Versioned by fingerprint so a re-measured file is never served from cache. */
-export function brollAssetMediaUrl(assetId: string, digest: string) {
-  return `${API_BASE}/broll/library/${assetId}/media?v=${digest.slice(7, 19)}`
+export function brollAssetMediaUrl(assetId: string, digest: string, projectId: string | null = null) {
+  return `${API_BASE}${libraryBase(projectId)}/${assetId}/media?v=${digest.slice(7, 19)}`
 }
 
-export function brollAssetThumbnailUrl(asset: BrollLibraryAsset) {
-  return `${API_BASE}/broll/library/${asset.id}/thumbnail?v=${asset.fingerprint.digest.slice(7, 19)}`
+export function brollAssetThumbnailUrl(asset: BrollLibraryAsset, projectId: string | null = null) {
+  return `${API_BASE}${libraryBase(projectId)}/${asset.id}/thumbnail?v=${asset.fingerprint.digest.slice(7, 19)}`
 }
 
 const brollBase = (projectId: string) => `/projects/${projectId}/broll`

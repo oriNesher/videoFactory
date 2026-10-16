@@ -240,11 +240,11 @@ def test_moments_are_validated_against_the_asset(client, lib):
 @pytest.fixture
 def checker(setup, client):
     base = broll.base_reference(broll.describe_base(setup["project"], setup["key"]))
-    candidates = broll_planner.readiness(broll_library.read_entries())["candidates"]
+    candidates = broll_planner.readiness(broll_library.visible_entries(setup["project"]))["candidates"]
     offered = {candidate["asset_id"]: candidate for candidate in candidates}
 
     def check(raw):
-        return broll_planner.validate_answer(raw, base=base, offered=offered, library=broll.library_index())
+        return broll_planner.validate_answer(raw, base=base, offered=offered, library=broll.library_index(setup["project"]))
 
     return check
 
@@ -285,16 +285,16 @@ def test_invalid_answers_are_rejected_with_a_reason(setup, checker, build, fragm
 
 def test_a_video_described_only_as_a_whole_plays_from_its_start(client, setup, checker):
     client.patch(f"/broll/library/{setup['clip']}", json={"moments": []})
-    candidates = broll_planner.readiness(broll_library.read_entries())["candidates"]
+    candidates = broll_planner.readiness(broll_library.visible_entries(setup["project"]))["candidates"]
     clip = next(candidate for candidate in candidates if candidate["asset_id"] == setup["clip"])
     assert "must be 0" in clip["view"]["source_rule"]
     base = broll.base_reference(broll.describe_base(setup["project"], setup["key"]))
     offered = {candidate["asset_id"]: candidate for candidate in candidates}
     plan, errors = broll_planner.validate_answer(answer(clip_at(setup["clip"], 1, 2.5, source_start=1.0)), base=base,
-                                                 offered=offered, library=broll.library_index())
+                                                 offered=offered, library=broll.library_index(setup["project"]))
     assert plan is None and "described only as a whole" in errors[0]
     plan, errors = broll_planner.validate_answer(answer({**clip_at(setup["clip"], 1, 2.5), "source_start": None}),
-                                                 base=base, offered=offered, library=broll.library_index())
+                                                 base=base, offered=offered, library=broll.library_index(setup["project"]))
     assert errors == [] and plan["placements"][0]["source_start"] == 0.0
     assert any("default" in note for note in plan["normalisation"]["notes"])
 

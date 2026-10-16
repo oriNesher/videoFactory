@@ -447,6 +447,20 @@ export default function ProjectsScreen() {
               ))}
             </ol>
 
+            {draftSources.length > 0 && (() => {
+              const measured = draftSources.filter(
+                (source) => source.exists && source.duration_seconds != null,
+              )
+              const total = measured.reduce((sum, source) => sum + (source.duration_seconds ?? 0), 0)
+              const unknown = draftSources.length - measured.length
+              return (
+                <p className="small">
+                  Total length: <span className="mono">{formatDuration(total)}</span>
+                  {unknown > 0 && ` (${unknown} clips without a known length are not counted)`}
+                </p>
+              )
+            })()}
+
             {draftSources.length === 0 && (
               <p className="hint">No footage yet.</p>
             )}

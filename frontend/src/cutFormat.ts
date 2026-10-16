@@ -11,3 +11,8 @@ export function formatLength(value: number | null | undefined): string {
   const seconds = value - minutes * 60
   return `${minutes}:${seconds.toFixed(1).padStart(4, '0')}`
 }
+
+/** A preview's slot: its kind and the clip(s) it shows, e.g. `join:a:b`. */
+export function slotOf(kind: string, sourceId: string, nextId?: string): string {
+  return [kind, sourceId, ...(nextId ? [nextId] : [])].join(':')
+}

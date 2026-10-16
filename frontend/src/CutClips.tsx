@@ -1,5 +1,5 @@
 import { sampleUrl } from './api'
-import { formatLength, formatSeconds } from './cutFormat'
+import { formatLength, formatSeconds, slotOf } from './cutFormat'
 import type {
   BoundaryOrigin,
   BoundaryOverride,
@@ -33,9 +33,7 @@ const KIND_TITLES: Record<SampleKind, string> = {
 
 const NUDGE_SECONDS = 0.1
 
-function slotOf(kind: SampleKind, sourceId: string, nextId?: string): string {
-  return [kind, sourceId, ...(nextId ? [nextId] : [])].join(':')
-}
+export type PendingStatus = 'queued' | 'running'
 
 function sampleSlot(sample: CutSample): string {
   return [sample.kind, ...sample.source_ids].join(':')
@@ -128,6 +126,7 @@ function PreviewSlot({
   kind,
   sample,
   request,
+  pending,
   disabled,
   onRender,
 }: {
@@ -135,6 +134,8 @@ function PreviewSlot({
   kind: SampleKind
   sample: CutSample | undefined
   request: SampleRequest
+  /** Set while a job is rendering (or waiting to render) this preview. */
+  pending: PendingStatus | undefined
   disabled: boolean
   onRender: (requests: SampleRequest[]) => void
 }) {
@@ -149,12 +150,19 @@ function PreviewSlot({
         <button
           type="button"
           className={kind === 'opening' && !sample ? 'primary' : undefined}
-          disabled={disabled}
+          disabled={disabled || pending !== undefined}
           onClick={() => onRender([request])}
         >
           {sample ? 'Render again' : 'Render preview'}
         </button>
       </div>
+
+      {pending && (
+        <p className="working small">
+          <span className="spinner" aria-hidden="true" />
+          {pending === 'running' ? 'Rendering this preview…' : 'Waiting to render this preview…'}
+        </p>
+      )}
 
       {sample?.stale && (
         <p className="message warn">
@@ -235,6 +243,7 @@ function ClipRow({
   clip,
   next,
   samples,
+  pending,
   disabled,
   showAdjustments,
   onOverride,
@@ -244,6 +253,7 @@ function ClipRow({
   clip: CutStateClip
   next: CutStateClip | undefined
   samples: Map<string, CutSample>
+  pending: Map<string, PendingStatus>
   disabled: boolean
   showAdjustments: boolean
   onOverride: (sourceId: string, override: BoundaryOverride | null) => void
@@ -346,6 +356,7 @@ function ClipRow({
             projectId={projectId}
             kind="opening"
             sample={samples.get(slotOf('opening', clip.source_id))}
+            pending={pending.get(slotOf('opening', clip.source_id))}
             request={{ kind: 'opening', source_id: clip.source_id }}
             disabled={disabled || clip.error !== null}
             onRender={onRender}
@@ -354,6 +365,7 @@ function ClipRow({
             projectId={projectId}
             kind="ending"
             sample={samples.get(slotOf('ending', clip.source_id))}
+            pending={pending.get(slotOf('ending', clip.source_id))}
             request={{ kind: 'ending', source_id: clip.source_id }}
             disabled={disabled || clip.error !== null}
             onRender={onRender}
@@ -363,6 +375,7 @@ function ClipRow({
               projectId={projectId}
               kind="join"
               sample={samples.get(slotOf('join', clip.source_id, next.source_id))}
+              pending={pending.get(slotOf('join', clip.source_id, next.source_id))}
               request={{
                 kind: 'join',
                 source_id: clip.source_id,
@@ -382,6 +395,8 @@ type Props = {
   projectId: string
   clips: CutStateClip[]
   samples: CutSample[]
+  /** Previews being rendered or waiting to render, by slot. */
+  pending: Map<string, PendingStatus>
   disabled: boolean
   /** Per-clip start/end controls are optional and hidden unless asked for. */
   showAdjustments: boolean
@@ -393,6 +408,7 @@ export default function CutClips({
   projectId,
   clips,
   samples,
+  pending,
   disabled,
   showAdjustments,
   onOverride,
@@ -410,6 +426,7 @@ export default function CutClips({
           clip={clip}
           next={clips[index + 1]}
           samples={bySlot}
+          pending={pending}
           disabled={disabled}
           showAdjustments={showAdjustments}
           onOverride={onOverride}

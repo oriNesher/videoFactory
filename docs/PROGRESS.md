@@ -1749,6 +1749,20 @@ watch the composed preview and read the summary and each placement's reason
 → (optionally correct one placement; the plan history keeps both) →
 **Approve and continue** → download. See README steps 53–59.
 
+## Real-world trial — small fixes
+
+These are small changes made while producing the first real video. The trial log
+is [REAL_WORLD_TRIAL.md](REAL_WORLD_TRIAL.md).
+
+- The project editor shows the total footage length under the clips list.
+  Checked with `tsc -b`. No new lint warnings.
+- Cutting shows each active job with a spinner, progress bar and **Cancel**.
+  A preview being rendered says so on its own slot. A cut run creating
+  subtitles shows a spinner and **Cancel**. Backend: the cutting state's job
+  summaries include `samples` (the preview requests). Checked with `tsc -b`,
+  lint and `pytest test_boundaries.py -k "state or sample or cancel"`
+  (6 passed).
+
 ## Roadmap
 
 | Stage | Scope | Status |

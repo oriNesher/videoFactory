@@ -147,6 +147,9 @@ def _cutting_jobs(project_id: str) -> dict:
             "finished_at": record["finished_at"],
             "error": record["error"],
             "result": record["result"],
+            # Which previews a preview job renders, so each one can show it
+            # is on its way. Absent (None) for other job types.
+            "samples": (record.get("input") or {}).get("samples"),
         }
         if record["status"] in jobs.ACTIVE_STATUSES:
             active.append(summary)

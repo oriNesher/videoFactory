@@ -323,8 +323,9 @@ def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def library_index() -> dict[str, dict]:
-    return {entry["id"]: entry for entry in broll_library.read_entries()}
+def library_index(project_id: str) -> dict[str, dict]:
+    """The assets this project may use: its own library and the general one."""
+    return {entry["id"]: entry for entry in broll_library.visible_entries(project_id)}
 
 
 def validate_placements(raw: Any, base: dict, assets: dict[str, dict]) -> tuple[list[dict], list[dict]]:
@@ -484,7 +485,7 @@ def save_plan(
             "The B-roll plan changed since this screen loaded it (now revision %d). Reload and try again." % expected,
             status_code=409,
         )
-    normalised, errors = validate_placements(placements, base, library_index())
+    normalised, errors = validate_placements(placements, base, library_index(project_id))
     if errors:
         raise BrollValidationFailed(errors)
 
@@ -536,7 +537,7 @@ def add_placement(
     if (base_revision or 0) != revision:
         raise BrollError("The B-roll plan changed since this screen loaded it. Reload and try again.", status_code=409)
 
-    asset = broll_library.read_entry(asset_id)
+    asset = broll_library.read_entry(asset_id, project_id)
     status, reason = broll_library.status_of(asset)
     if status != broll_library.STATUS_AVAILABLE:
         raise BrollError("This asset cannot be used: %s" % reason, status_code=409)
@@ -657,7 +658,7 @@ def compose(project_id: str, key: Any) -> dict:
     described = describe_base(project_id, key)
     base = base_reference(described)
     plan = find_plan(project_id, base["key"], base["digest"])
-    library = library_index()
+    library = library_index(project_id)
     usable, issues = [], []
     if plan is not None:
         usable, issues = validate_placements(plan["placements"], base, library)
@@ -837,7 +838,8 @@ def constraints() -> dict:
 
 
 def catalog(project_id: str | None = None, key: Any = None) -> dict:
-    """The machine-readable catalog a stage 3B planner will be given.
+    """The machine-readable catalog a stage 3B planner will be given: the
+    general library's assets, plus with `project_id` that project's own.
 
     No paths and no filenames anywhere; see `broll_library.catalog_entry`.
     """
@@ -846,7 +848,7 @@ def catalog(project_id: str | None = None, key: Any = None) -> dict:
         **broll_templates.catalog(),
         "constraints": constraints(),
         "assets_note": broll_library.CATALOG_NOTE,
-        "assets": [broll_library.catalog_entry(entry) for entry in broll_library.read_entries()],
+        "assets": [broll_library.catalog_entry(entry) for entry in broll_library.visible_entries(project_id)],
         "base": None,
     }
     if project_id is not None and key is not None:

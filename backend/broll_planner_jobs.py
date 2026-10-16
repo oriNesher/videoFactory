@@ -153,9 +153,9 @@ def last_job(project_id: str, key: str) -> dict | None:
 # --- the snapshot ------------------------------------------------------------------------
 
 
-def catalog_readiness() -> dict:
-    """Which assets automatic planning may use, and the one message to show if any."""
-    found = broll_planner.readiness(broll_library.read_entries())
+def catalog_readiness(project_id: str) -> dict:
+    """Which assets automatic planning may use for this project, and the one message to show if any."""
+    found = broll_planner.readiness(broll_library.visible_entries(project_id))
     return {key: value for key, value in found.items() if key != "candidates"}
 
 
@@ -210,7 +210,7 @@ def snapshot(project_id: str, raw: Any) -> dict:
                 % captions.MODELS_BY_ID[settings["model"]]["label"], status_code=409,
             )
 
-    ready = broll_planner.readiness(broll_library.read_entries())
+    ready = broll_planner.readiness(broll_library.visible_entries(project_id))
     if not ready["ready"]:
         raise broll.BrollError(ready["message"], status_code=409)
 
@@ -324,7 +324,7 @@ def find_reusable_run(project_id: str, cache_key: str, base: dict, request_id: s
     With `request_id`, only a run made by an earlier attempt of the same
     request (a retried job) — so "Make a new plan" asks once, even if retried.
     """
-    library = broll.library_index()
+    library = broll.library_index(project_id)
     for run in list_runs(project_id):
         if request_id is not None and run.get("request_id") != request_id:
             continue
@@ -386,7 +386,7 @@ def _plan(context: jobs.JobContext, snap: dict, prepared: dict, transcript: dict
     offered = {candidate["asset_id"]: candidate for candidate in prepared["offered"]}
     try:
         outcome = broll_planner.request_plan(
-            planner, prepared["request"], base=snap["base"], offered=offered, library=broll.library_index(),
+            planner, prepared["request"], base=snap["base"], offered=offered, library=broll.library_index(project_id),
             cancelled=lambda: context.cancelled,
             on_wait=lambda message: context.progress(message),
             on_stage=lambda message: context.progress(message),
@@ -453,7 +453,7 @@ def apply_run(project_id: str, run: dict, *, base_revision: int) -> dict:
     described = broll.describe_base(project_id, key)
     if described["fingerprint"]["digest"] != run["base"]["digest"]:
         raise broll.BrollError("This plan was made for an earlier version of the video.", status_code=409)
-    library = broll.library_index()
+    library = broll.library_index(project_id)
     for placement in run["placements"]:
         entry = library.get(placement["asset_id"])
         expected = run["catalog"]["asset_digests"].get(placement["asset_id"])

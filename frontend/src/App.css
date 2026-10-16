@@ -422,6 +422,55 @@ select:focus-visible {
   transition: width 200ms linear;
 }
 
+.progress-bar.indeterminate {
+  width: 30%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+
+/* Something is being worked on: a spinner next to what it is. */
+.working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+  color: var(--text-h);
+}
+
+.working-block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: var(--bg);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .progress-bar.indeterminate {
+    animation-duration: 3s;
+  }
+}
+
 .plan-detail {
   margin-top: 16px;
   border-top: 1px solid var(--border);
@@ -1234,4 +1283,33 @@ a.button.primary {
 
 .library-preview {
   max-height: 260px;
+}
+
+/* --- per-video libraries ------------------------------------------------------ */
+
+.library-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 15px;
+}
+
+.library-scope select {
+  min-width: 260px;
+}
+
+.badge.library-own {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.move-to-video {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }

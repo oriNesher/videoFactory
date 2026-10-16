@@ -1,10 +1,19 @@
-"""The local B-roll asset library (stage 3A).
+"""The local B-roll asset libraries (stage 3A).
 
-One library per workspace, shared by every project, in
+Two kinds of library, with the same layout:
 
-    <workspace>/library/broll/
+    <workspace>/library/broll/           the general library, shared by every project
+    <workspace>/projects/<id>/broll_library/   one project's own library
       library.json                  the entries (versioned, written atomically)
       thumbnails/<id>-<digest>.jpg  small previews, regenerated when a file changes
+
+**A project sees its own library and the general one, never another
+project's.** Every lookup made on behalf of a project goes through
+`visible_entries` / `read_entry(..., project_id)`, so a project's assets
+cannot be listed, placed, planned with or served from another project. Ids
+are unique across all libraries, so an asset keeps its id when it is moved
+between the general library and a project's (`move`), and plans that use it
+keep working. Each public entry says which library it is in (`library`).
 
 **Files are referenced, never copied** — the same rule as project footage. An
 entry records the file's absolute path, and the original stays exactly where
@@ -45,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from . import caption_inputs, folders, media, storage
-from .config import get_workspace_root
+from .config import get_projects_root, get_workspace_root
 
 LIBRARY_SCHEMA_VERSION = 1
 LIBRARY_KIND = "video_factory.broll_library"
@@ -60,6 +69,9 @@ VIDEO_EXTENSIONS = set(storage.VIDEO_EXTENSIONS)
 PLAYABLE_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
 PLAYABLE_VIDEO_CONTAINERS = {".mp4", ".m4v", ".mov", ".webm", ".mkv"}
 PLAYABLE_IMAGE_CODECS = {"png", "mjpeg", "webp"}
+
+LIBRARY_GENERAL = "general"
+LIBRARY_PROJECT = "project"
 
 STATUS_AVAILABLE = "available"
 STATUS_MISSING = "missing"
@@ -92,16 +104,22 @@ def _now() -> str:
 # --- locations ------------------------------------------------------------------
 
 
-def library_root() -> Path:
-    return get_workspace_root() / "library" / "broll"
+def library_root(project_id: str | None = None) -> Path:
+    """The general library, or with `project_id` that project's own."""
+    if project_id is None:
+        return get_workspace_root() / "library" / "broll"
+    project_id = storage.validate_project_id(project_id)
+    if not storage.project_file(project_id).is_file():
+        raise storage.ProjectNotFound("Video not found.")
+    return storage.project_directory(project_id) / "broll_library"
 
 
-def library_file() -> Path:
-    return library_root() / "library.json"
+def library_file(project_id: str | None = None) -> Path:
+    return library_root(project_id) / "library.json"
 
 
-def thumbnails_directory() -> Path:
-    return library_root() / "thumbnails"
+def thumbnails_directory(project_id: str | None = None) -> Path:
+    return library_root(project_id) / "thumbnails"
 
 
 def validate_asset_id(raw: Any) -> str:
@@ -111,13 +129,19 @@ def validate_asset_id(raw: Any) -> str:
 
 
 # --- the document -----------------------------------------------------------------
+#
+# Every entry read carries `library` (general or project) and, for a project's
+# own assets, `project_id`. Both say where the entry was read from; neither is
+# written to the file.
+
+_LOCATION_KEYS = ("library", "project_id")
 
 
-def _read_document() -> dict:
+def _read_document(project_id: str | None = None) -> dict:
     try:
-        document = storage.read_json(library_file())
+        document = storage.read_json(library_file(project_id))
     except FileNotFoundError:
-        return {"schema_version": LIBRARY_SCHEMA_VERSION, "kind": LIBRARY_KIND, "assets": []}
+        document = {"schema_version": LIBRARY_SCHEMA_VERSION, "kind": LIBRARY_KIND, "assets": []}
     except (OSError, ValueError) as error:
         raise LibraryError("The B-roll library file cannot be read: %s" % error, status_code=422) from error
     if not isinstance(document, dict) or document.get("kind") != LIBRARY_KIND:
@@ -126,7 +150,15 @@ def _read_document() -> dict:
         raise LibraryError("The B-roll library was written by a newer version.", status_code=422)
     assets = document.get("assets")
     document["assets"] = [entry for entry in assets if _well_formed(entry)] if isinstance(assets, list) else []
+    for entry in document["assets"]:
+        _locate(entry, project_id)
     return document
+
+
+def _locate(entry: dict, project_id: str | None) -> dict:
+    entry["library"] = LIBRARY_GENERAL if project_id is None else LIBRARY_PROJECT
+    entry["project_id"] = project_id
+    return entry
 
 
 def _well_formed(entry: Any) -> bool:
@@ -141,24 +173,56 @@ def _well_formed(entry: Any) -> bool:
     )
 
 
-def _write_document(document: dict) -> None:
+def _write_document(document: dict, project_id: str | None = None) -> None:
+    stored = {
+        **document,
+        "assets": [
+            {key: value for key, value in entry.items() if key not in _LOCATION_KEYS}
+            for entry in document["assets"]
+        ],
+    }
     try:
-        storage.write_json_atomic(library_file(), document)
+        storage.write_json_atomic(library_file(project_id), stored)
     except OSError as error:
         raise LibraryError("Saving the B-roll library failed: %s" % error, status_code=500) from error
 
 
-def read_entries() -> list[dict]:
-    """Raw entries, paths included. For the backend only."""
+def read_entries(project_id: str | None = None) -> list[dict]:
+    """One library's raw entries, paths included. For the backend only."""
     with _lock:
-        return _read_document()["assets"]
+        return _read_document(project_id)["assets"]
 
 
-def read_entry(asset_id: Any) -> dict:
+def visible_entries(project_id: str | None) -> list[dict]:
+    """Everything a project may use: its own assets, then the general ones.
+
+    Without a project, only the general library.
+    """
+    with _lock:
+        own = read_entries(project_id) if project_id is not None else []
+        return own + read_entries()
+
+
+def read_entry(asset_id: Any, project_id: str | None = None) -> dict:
+    """An asset visible to `project_id` (or a general asset, without one)."""
     asset_id = validate_asset_id(asset_id)
-    for entry in read_entries():
+    for entry in visible_entries(project_id):
         if entry["id"] == asset_id:
             return entry
+    raise LibraryError("That B-roll asset is not in the library.", status_code=404)
+
+
+def _find(asset_id: Any, project_id: str | None) -> tuple[dict, dict, str | None]:
+    """`(document, entry, owner)` for an asset visible to `project_id`, where
+    `owner` is the project whose library holds it (None: the general one).
+    Call with `_lock` held; write the document back with `owner`."""
+    asset_id = validate_asset_id(asset_id)
+    owners = ([project_id] if project_id is not None else []) + [None]
+    for owner in owners:
+        document = _read_document(owner)
+        entry = next((item for item in document["assets"] if item["id"] == asset_id), None)
+        if entry is not None:
+            return document, entry, owner
     raise LibraryError("That B-roll asset is not in the library.", status_code=404)
 
 
@@ -279,9 +343,11 @@ def _thumbnail_name(asset_id: str, digest: str) -> str:
     return "%s-%s.jpg" % (asset_id, digest.split(":")[-1][:12])
 
 
-def make_thumbnail(path: str, media_type: str, measured: dict, asset_id: str, digest: str) -> str | None:
+def make_thumbnail(
+    path: str, media_type: str, measured: dict, asset_id: str, digest: str, project_id: str | None = None,
+) -> str | None:
     """A small JPEG of one frame. None if FFmpeg cannot make one (shown as a placeholder)."""
-    directory = thumbnails_directory()
+    directory = thumbnails_directory(project_id)
     directory.mkdir(parents=True, exist_ok=True)
     name = _thumbnail_name(asset_id, digest)
     target = directory / name
@@ -300,9 +366,28 @@ def make_thumbnail(path: str, media_type: str, measured: dict, asset_id: str, di
     return name if result.returncode == 0 and target.is_file() else None
 
 
-def _remove_thumbnail(name: Any) -> None:
-    if isinstance(name, str) and re.match(r"^[0-9a-f]{12}-[0-9a-f]{12}\.jpg$", name):
-        (thumbnails_directory() / name).unlink(missing_ok=True)
+_THUMBNAIL_PATTERN = re.compile(r"^[0-9a-f]{12}-[0-9a-f]{12}\.jpg$")
+
+
+def _remove_thumbnail(name: Any, project_id: str | None = None) -> None:
+    if isinstance(name, str) and _THUMBNAIL_PATTERN.match(name):
+        (thumbnails_directory(project_id) / name).unlink(missing_ok=True)
+
+
+def _move_thumbnail(name: Any, source: str | None, target: str | None) -> str | None:
+    """Carry a thumbnail to another library's folder. None if there was none to carry."""
+    if not isinstance(name, str) or not _THUMBNAIL_PATTERN.match(name):
+        return None
+    origin = thumbnails_directory(source) / name
+    if not origin.is_file():
+        return None
+    destination = thumbnails_directory(target)
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        os.replace(origin, destination / name)
+    except OSError:
+        return None
+    return name
 
 
 # --- status ----------------------------------------------------------------------
@@ -338,6 +423,7 @@ def public_entry(entry: dict) -> dict:
     status, reason = status_of(entry)
     return {
         "id": entry["id"],
+        "library": entry.get("library", LIBRARY_GENERAL),
         "media_type": entry["media_type"],
         "filename": entry.get("filename") or os.path.basename(entry["path"]),
         "display_name": entry.get("display_name") or entry.get("filename") or entry["id"],
@@ -357,8 +443,15 @@ def public_entry(entry: dict) -> dict:
     }
 
 
-def list_public() -> list[dict]:
-    entries = read_entries()
+def list_public(project_id: str | None = None, *, own_only: bool = False) -> list[dict]:
+    """The general library; with `project_id`, what that project sees (its
+    own assets and the general ones), or with `own_only` its own alone."""
+    if project_id is None:
+        entries = read_entries()
+    elif own_only:
+        entries = read_entries(project_id)
+    else:
+        entries = visible_entries(project_id)
     entries.sort(key=lambda entry: entry.get("imported_at") or "", reverse=True)
     return [public_entry(entry) for entry in entries]
 
@@ -366,15 +459,33 @@ def list_public() -> list[dict]:
 # --- changes ----------------------------------------------------------------------
 
 
-def choose_and_import() -> dict:
+def choose_and_import(project_id: str | None = None) -> dict:
+    library_root(project_id)  # an unknown project fails before the dialog opens
     chosen = folders.choose_broll_file()
     if chosen["cancelled"]:
         return {"cancelled": True, "asset": None, "duplicate": False}
-    return import_asset(chosen["path"])
+    return import_asset(chosen["path"], project_id)
 
 
-def import_asset(raw_path: Any) -> dict:
-    """Measure a file and add it to the library, referenced where it is."""
+def _all_ids() -> set[str]:
+    """Ids in every library, so a new id is unique wherever the asset moves."""
+    ids = {entry["id"] for entry in read_entries()}
+    root = get_projects_root()
+    for directory in root.glob("*/broll_library") if root.is_dir() else []:
+        try:
+            ids |= {entry["id"] for entry in read_entries(directory.parent.name)}
+        except storage.ProjectError:
+            continue
+    return ids
+
+
+def import_asset(raw_path: Any, project_id: str | None = None) -> dict:
+    """Measure a file and add it to a library, referenced where it is: the
+    general one, or with `project_id` that project's own.
+
+    A file the project can already see (in its library or the general one)
+    is reported as a duplicate rather than imported twice.
+    """
     path = validate_asset_path(raw_path)
     media_type = media_type_for(path)
     fingerprint = current_fingerprint(path)
@@ -382,16 +493,19 @@ def import_asset(raw_path: Any) -> dict:
         raise LibraryError("The file cannot be read: %s" % path)
 
     with _lock:
-        document = _read_document()
-        for entry in document["assets"]:
+        for entry in visible_entries(project_id):
             same_path = os.path.normcase(entry["path"]) == os.path.normcase(path)
             if same_path or entry["fingerprint"].get("digest") == fingerprint["digest"]:
                 return {"cancelled": False, "asset": public_entry(entry), "duplicate": True}
-        if len(document["assets"]) >= MAX_ASSETS:
+        if len(read_entries(project_id)) >= MAX_ASSETS:
             raise LibraryError("The library holds up to %d assets." % MAX_ASSETS)
 
     measured = measure(path, media_type)
+    with _lock:
+        taken = _all_ids()
     asset_id = uuid.uuid4().hex[:12]
+    while asset_id in taken:
+        asset_id = uuid.uuid4().hex[:12]
     entry = {
         "id": asset_id,
         "media_type": media_type,
@@ -404,12 +518,12 @@ def import_asset(raw_path: Any) -> dict:
         "measured_at": _now(),
         "measured": measured,
         "fingerprint": fingerprint,
-        "thumbnail": make_thumbnail(path, media_type, measured, asset_id, fingerprint["digest"]),
+        "thumbnail": make_thumbnail(path, media_type, measured, asset_id, fingerprint["digest"], project_id),
     }
     with _lock:
-        document = _read_document()
-        document["assets"].append(entry)
-        _write_document(document)
+        document = _read_document(project_id)
+        document["assets"].append(_locate(entry, project_id))
+        _write_document(document, project_id)
     return {"cancelled": False, "asset": public_entry(entry), "duplicate": False}
 
 
@@ -500,18 +614,14 @@ def is_described(entry: dict) -> bool:
     return bool(entry.get("description") or entry.get("tags") or valid_moments(entry))
 
 
-def update_details(asset_id: Any, changes: dict) -> dict:
+def update_details(asset_id: Any, changes: dict, project_id: str | None = None) -> dict:
     """The user's own words: display name, description, tags, moments. Nothing measured."""
-    asset_id = validate_asset_id(asset_id)
     allowed = {"display_name", "description", "tags", "moments"}
     unknown = set(changes) - allowed
     if unknown:
         raise LibraryError("Only the name, description, tags and moments can be edited.")
     with _lock:
-        document = _read_document()
-        entry = next((item for item in document["assets"] if item["id"] == asset_id), None)
-        if entry is None:
-            raise LibraryError("That B-roll asset is not in the library.", status_code=404)
+        document, entry, owner = _find(asset_id, project_id)
         if "display_name" in changes:
             name = _clean_text(changes["display_name"], MAX_DISPLAY_NAME, "The name")
             entry["display_name"] = name.replace("\n", " ") if name else None
@@ -521,43 +631,75 @@ def update_details(asset_id: Any, changes: dict) -> dict:
             entry["tags"] = _clean_tags(changes["tags"])
         if "moments" in changes:
             entry["moments"] = _clean_moments(changes["moments"], entry)
-        _write_document(document)
+        _write_document(document, owner)
         return public_entry(entry)
 
 
-def remeasure(asset_id: Any) -> dict:
+def remeasure(asset_id: Any, project_id: str | None = None) -> dict:
     """Measure a changed file again. Plans that used it must be reviewed again."""
-    entry = read_entry(asset_id)
+    with _lock:
+        _document, entry, owner = _find(asset_id, project_id)
     path = entry["path"]
     fingerprint = current_fingerprint(path)
     if fingerprint is None:
         raise LibraryError("The file is missing: %s" % path, status_code=409)
     measured = measure(path, entry["media_type"])
-    thumbnail = make_thumbnail(path, entry["media_type"], measured, entry["id"], fingerprint["digest"])
+    thumbnail = make_thumbnail(path, entry["media_type"], measured, entry["id"], fingerprint["digest"], owner)
     with _lock:
-        document = _read_document()
+        document = _read_document(owner)
         stored = next((item for item in document["assets"] if item["id"] == entry["id"]), None)
         if stored is None:
             raise LibraryError("That B-roll asset is not in the library.", status_code=404)
         if stored.get("thumbnail") != thumbnail:
-            _remove_thumbnail(stored.get("thumbnail"))
+            _remove_thumbnail(stored.get("thumbnail"), owner)
         stored.update(measured=measured, fingerprint=fingerprint, measured_at=_now(), thumbnail=thumbnail)
-        _write_document(document)
+        _write_document(document, owner)
         return public_entry(stored)
 
 
-def remove(asset_id: Any) -> dict:
+def remove(asset_id: Any, project_id: str | None = None) -> dict:
     """Remove the library entry only. The file on disk is never touched."""
-    asset_id = validate_asset_id(asset_id)
     with _lock:
-        document = _read_document()
-        entry = next((item for item in document["assets"] if item["id"] == asset_id), None)
-        if entry is None:
-            raise LibraryError("That B-roll asset is not in the library.", status_code=404)
-        document["assets"] = [item for item in document["assets"] if item["id"] != asset_id]
-        _write_document(document)
-    _remove_thumbnail(entry.get("thumbnail"))
-    return {"removed": asset_id}
+        document, entry, owner = _find(asset_id, project_id)
+        document["assets"] = [item for item in document["assets"] if item["id"] != entry["id"]]
+        _write_document(document, owner)
+    _remove_thumbnail(entry.get("thumbnail"), owner)
+    return {"removed": entry["id"]}
+
+
+def move(asset_id: Any, project_id: str, to: Any) -> dict:
+    """Move an asset between the general library and `project_id`'s own.
+
+    `to="general"` shares one of the project's assets with every project;
+    `to="project"` makes a general asset this project's alone — other
+    projects' plans that used it then report the asset as gone. The id stays
+    the same, so this project's plans keep working either way.
+    """
+    if to not in (LIBRARY_GENERAL, LIBRARY_PROJECT):
+        raise LibraryError("An asset moves to the general library or to a video's own.")
+    target = None if to == LIBRARY_GENERAL else project_id
+    library_root(project_id)
+    with _lock:
+        source_document, entry, owner = _find(asset_id, project_id)
+        if owner == target:
+            return public_entry(entry)
+        target_document = _read_document(target)
+        if len(target_document["assets"]) >= MAX_ASSETS:
+            raise LibraryError("The library holds up to %d assets." % MAX_ASSETS)
+        for other in target_document["assets"]:
+            if other["fingerprint"].get("digest") == entry["fingerprint"].get("digest"):
+                raise LibraryError(
+                    "The same file is already there as \"%s\"." % public_entry(other)["display_name"], status_code=409,
+                )
+        moved = {key: value for key, value in entry.items() if key not in _LOCATION_KEYS}
+        moved["thumbnail"] = _move_thumbnail(entry.get("thumbnail"), owner, target)
+        target_document["assets"].append(_locate(moved, target))
+        # Written to its new library first: if the second write fails, the
+        # asset is in both rather than in neither.
+        _write_document(target_document, target)
+        source_document["assets"] = [item for item in source_document["assets"] if item["id"] != entry["id"]]
+        _write_document(source_document, owner)
+        return public_entry(moved)
 
 
 # --- serving -----------------------------------------------------------------------
@@ -569,20 +711,20 @@ CONTENT_TYPES = {
 }
 
 
-def media_file(asset_id: Any) -> tuple[Path, str]:
-    entry = read_entry(asset_id)
+def media_file(asset_id: Any, project_id: str | None = None) -> tuple[Path, str]:
+    entry = read_entry(asset_id, project_id)
     path = Path(entry["path"])
     if not path.is_file():
         raise LibraryError("The asset's file is missing.", status_code=404)
     return path, CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
-def thumbnail_file(asset_id: Any) -> Path:
-    entry = read_entry(asset_id)
+def thumbnail_file(asset_id: Any, project_id: str | None = None) -> Path:
+    entry = read_entry(asset_id, project_id)
     name = entry.get("thumbnail")
     if not isinstance(name, str):
         raise LibraryError("This asset has no thumbnail.", status_code=404)
-    directory = thumbnails_directory().resolve()
+    directory = thumbnails_directory(entry["project_id"]).resolve()
     path = (directory / name).resolve()
     if not path.is_relative_to(directory) or not path.is_file():
         raise LibraryError("This asset has no thumbnail.", status_code=404)

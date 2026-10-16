@@ -1070,8 +1070,27 @@ Open a project and scroll to **B-roll** (below **Zooms**).
 
 ### The library
 
-**Asset library** (inside the B-roll section) is shared by every project in
-the workspace.
+There are two kinds of asset library:
+
+- the **general library**, shared by every video in the workspace
+  (`workspace/library/broll/`);
+- each video's **own library**, which only that video can use
+  (`workspace/projects/<id>/broll_library/`).
+
+A video sees its own assets plus the general ones, never another video's:
+they cannot be listed, placed, planned with or served from it. In the
+B-roll section, **Asset library** shows both kinds with a **This video** or
+**General** badge, and **Import image or video…** asks which one to import
+into. An asset moves between the two without losing its id, so plans that
+use it keep working: **Share with all videos** moves it to the general
+library, and **Make it this video's only** (or **Move to that video** on the
+library page) takes it out. Other videos' plans that used it then report it
+as missing.
+
+The **Asset library** tab on the home page manages one library at a time:
+pick **General** or a video at the top. It lists every asset with search and
+filters, a **Description needed** queue for describing undescribed assets in
+place, and a full editor for the selected asset.
 
 - **Import image or video…** opens the machine's file dialog (or **Paste a
   path instead**). Accepted: PNG, JPEG, WebP images; H.264, VP8, VP9 or AV1

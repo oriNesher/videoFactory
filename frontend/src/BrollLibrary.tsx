@@ -3,6 +3,7 @@ import {
   brollAssetMediaUrl,
   brollAssetThumbnailUrl,
   importBrollAsset,
+  moveBrollAsset,
   remeasureBrollAsset,
   removeBrollAsset,
   updateBrollAsset,
@@ -13,48 +14,63 @@ import { describeAsset } from './brollFormat'
 import type { BrollLibraryAsset } from './types'
 
 /**
- * The workspace-wide B-roll library, compactly: thumbnail, measured facts and
- * status per asset. Name, description and tags are the user's own words and
- * sit behind "Details"; nothing is guessed from a filename.
+ * The assets one video can use — its own and the general library's —
+ * compactly: thumbnail, measured facts, status and which library each is in.
+ * Name, description and tags are the user's own words and sit behind
+ * "Details"; nothing is guessed from a filename.
  */
 export default function BrollLibrary({
+  projectId,
   assets,
   storageNote,
   onChanged,
 }: {
+  projectId: string
   assets: BrollLibraryAsset[]
   storageNote: string
   onChanged: () => Promise<void> | void
 }) {
   const { message, setMessage, busy, act } = useLibraryActions(onChanged)
   const [playing, setPlaying] = useState<string | null>(null)
+  // This video's own first, then the general library.
+  const ordered = [...assets].sort((a, b) => Number(a.library === 'general') - Number(b.library === 'general'))
 
   return (
     <div className="broll-library">
-      <AssetImport storageNote={storageNote} busy={busy} act={act} setMessage={setMessage} />
+      <AssetImport projectId={projectId} storageNote={storageNote} busy={busy} act={act} setMessage={setMessage} />
       {message && <p className={`message ${message.kind}`}>{message.text}</p>}
 
       {assets.length === 0 ? (
-        <p className="hint">The library is empty. Import screen recordings, clips or images to use as B-roll.</p>
+        <p className="hint">No assets yet. Import screen recordings, clips or images to use as B-roll.</p>
       ) : (
         <ul className="broll-grid">
-          {assets.map((asset) => (
+          {ordered.map((asset) => (
             <li key={asset.id} className={`broll-card ${asset.status === 'available' ? '' : 'unusable'}`}>
-              <AssetThumb asset={asset} playing={playing === asset.id} />
+              <AssetThumb asset={asset} projectId={projectId} playing={playing === asset.id} />
               <strong className="broll-name" title={asset.filename}>
                 {asset.display_name}
               </strong>
               <span className="small">{describeAsset(asset)}</span>
+              <span className="row">
+                <LibraryBadge asset={asset} />
+              </span>
               <AssetStatus asset={asset} />
               {asset.status === 'available' && !asset.described && (
                 <span className="badge warn" title="Automatic planning only chooses assets you have described.">
                   Not described — add a description to use it automatically
                 </span>
               )}
-              <AssetButtons asset={asset} busy={busy} act={act} playing={playing === asset.id} onPlay={setPlaying} />
+              <AssetButtons
+                asset={asset}
+                projectId={projectId}
+                busy={busy}
+                act={act}
+                playing={playing === asset.id}
+                onPlay={setPlaying}
+              />
               <details className="small">
                 <summary>{asset.described ? 'Details' : 'Describe…'}</summary>
-                <AssetEditor asset={asset} busy={busy} act={act} />
+                <AssetEditor asset={asset} projectId={projectId} busy={busy} act={act} />
               </details>
             </li>
           ))}
@@ -64,13 +80,35 @@ export default function BrollLibrary({
   )
 }
 
-/** Import by file dialog, or by a pasted path where the dialog cannot open. */
+/** Which library an asset is in, as seen from a video. */
+export function LibraryBadge({ asset }: { asset: BrollLibraryAsset }) {
+  return asset.library === 'project' ? (
+    <span className="badge library-own" title="Only this video can use it.">
+      This video
+    </span>
+  ) : (
+    <span className="badge" title="Every video can use it.">
+      General
+    </span>
+  )
+}
+
+/**
+ * Import by file dialog, or by a pasted path where the dialog cannot open.
+ * From a video, the user picks its own library or the general one.
+ */
 export function AssetImport({
+  projectId,
+  chooseLibrary = true,
   storageNote,
   busy,
   act,
   setMessage,
 }: {
+  /** Null: the general library, with no choice offered. */
+  projectId: string | null
+  /** False: always into `projectId`'s own library. */
+  chooseLibrary?: boolean
   storageNote: string
   busy: boolean
   act: Act
@@ -78,16 +116,19 @@ export function AssetImport({
 }) {
   const [path, setPath] = useState('')
   const [showPath, setShowPath] = useState(false)
+  const [target, setTarget] = useState<BrollLibraryAsset['library']>('project')
+  const into = projectId && (!chooseLibrary || target === 'project') ? projectId : null
 
   async function importFile(fromPath: string | null) {
     await act(async () => {
-      const result = await importBrollAsset(fromPath)
+      const result = await importBrollAsset(fromPath, into)
       if (result.cancelled) return
       setPath('')
+      const where = result.asset?.library === 'project' ? "this video's library" : 'the general library'
       setMessage(
         result.duplicate
-          ? { kind: 'warn', text: `Already in the library as "${result.asset?.display_name}".` }
-          : { kind: 'ok', text: `Added "${result.asset?.display_name}". The file stays where it is.` },
+          ? { kind: 'warn', text: `Already in ${where} as "${result.asset?.display_name}".` }
+          : { kind: 'ok', text: `Added "${result.asset?.display_name}" to ${where}. The file stays where it is.` },
       )
     }, 'Importing failed.')
   }
@@ -98,6 +139,20 @@ export function AssetImport({
         <button type="button" className="primary" onClick={() => void importFile(null)} disabled={busy}>
           {busy ? 'Working…' : 'Import image or video…'}
         </button>
+        {projectId && chooseLibrary && (
+          <label className="choice">
+            into
+            <select
+              value={target}
+              onChange={(event) => setTarget(event.target.value as BrollLibraryAsset['library'])}
+              disabled={busy}
+              aria-label="Library to import into"
+            >
+              <option value="project">this video only</option>
+              <option value="general">the general library (all videos)</option>
+            </select>
+          </label>
+        )}
         <button type="button" className="link" onClick={() => setShowPath((value) => !value)} disabled={busy}>
           {showPath ? 'Hide path field' : 'Paste a path instead'}
         </button>
@@ -128,13 +183,21 @@ export function AssetImport({
   )
 }
 
-export function AssetThumb({ asset, playing = false }: { asset: BrollLibraryAsset; playing?: boolean }) {
+export function AssetThumb({
+  asset,
+  projectId = null,
+  playing = false,
+}: {
+  asset: BrollLibraryAsset
+  projectId?: string | null
+  playing?: boolean
+}) {
   return (
     <div className="broll-thumb">
       {playing && asset.status === 'available' ? (
-        <video src={brollAssetMediaUrl(asset.id, asset.fingerprint.digest)} controls autoPlay muted />
+        <video src={brollAssetMediaUrl(asset.id, asset.fingerprint.digest, projectId)} controls autoPlay muted />
       ) : asset.has_thumbnail ? (
-        <img src={brollAssetThumbnailUrl(asset)} alt="" loading="lazy" />
+        <img src={brollAssetThumbnailUrl(asset, projectId)} alt="" loading="lazy" />
       ) : (
         <span className="small">{asset.media_type === 'image' ? 'Image' : 'Video'}</span>
       )}
@@ -157,12 +220,14 @@ export function AssetStatus({ asset }: { asset: BrollLibraryAsset }) {
 /** Play (videos) and Re-measure (changed files). */
 export function AssetButtons({
   asset,
+  projectId = null,
   busy,
   act,
   playing,
   onPlay,
 }: {
   asset: BrollLibraryAsset
+  projectId?: string | null
   busy: boolean
   act: Act
   playing: boolean
@@ -177,21 +242,49 @@ export function AssetButtons({
           {playing ? 'Stop' : 'Play'}
         </button>
       )}
-      {asset.status === 'changed' && (
-        <button
-          type="button"
-          onClick={() => void act(async () => void (await remeasureBrollAsset(asset.id)), 'Re-measuring failed.')}
-          disabled={busy}
-        >
-          Re-measure
-        </button>
-      )}
+      {asset.status === 'changed' && <RemeasureButton asset={asset} projectId={projectId} busy={busy} act={act} />}
     </div>
   )
 }
 
-/** Name, description, tags and moments — the user's own words — plus removal. */
-export function AssetEditor({ asset, busy, act }: { asset: BrollLibraryAsset; busy: boolean; act: Act }) {
+export function RemeasureButton({
+  asset,
+  projectId = null,
+  busy,
+  act,
+}: {
+  asset: BrollLibraryAsset
+  projectId?: string | null
+  busy: boolean
+  act: Act
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => void act(async () => void (await remeasureBrollAsset(asset.id, projectId)), 'Re-measuring failed.')}
+      disabled={busy}
+    >
+      Re-measure
+    </button>
+  )
+}
+
+/**
+ * Name, description, tags and moments — the user's own words — plus removal.
+ * Seen from a video, also moving the asset between that video's library and
+ * the general one.
+ */
+export function AssetEditor({
+  asset,
+  projectId = null,
+  busy,
+  act,
+}: {
+  asset: BrollLibraryAsset
+  projectId?: string | null
+  busy: boolean
+  act: Act
+}) {
   const [name, setName] = useState(asset.display_name_source === 'user' ? asset.display_name : '')
   const [description, setDescription] = useState(asset.description ?? '')
   const [tags, setTags] = useState(asset.tags.join(', '))
@@ -238,12 +331,16 @@ export function AssetEditor({ asset, busy, act }: { asset: BrollLibraryAsset; bu
             }
             setMomentError(null)
             void act(async () => {
-              await updateBrollAsset(asset.id, {
-                display_name: name.trim() || null,
-                description: description.trim() || null,
-                tags: splitTags(tags),
-                ...(asset.media_type === 'video' ? { moments: parsed } : {}),
-              })
+              await updateBrollAsset(
+                asset.id,
+                {
+                  display_name: name.trim() || null,
+                  description: description.trim() || null,
+                  tags: splitTags(tags),
+                  ...(asset.media_type === 'video' ? { moments: parsed } : {}),
+                },
+                projectId,
+              )
             }, 'Saving failed.')
           }}
         >
@@ -253,17 +350,50 @@ export function AssetEditor({ asset, busy, act }: { asset: BrollLibraryAsset; bu
           type="button"
           disabled={busy}
           onClick={() => {
-            if (window.confirm(`Remove "${asset.display_name}" from the library? The file itself is not touched.`))
-              void act(async () => void (await removeBrollAsset(asset.id)), 'Removing failed.')
+            const scope = asset.library === 'general' ? ' Every video loses it.' : ''
+            if (window.confirm(`Remove "${asset.display_name}" from the library?${scope} The file itself is not touched.`))
+              void act(async () => void (await removeBrollAsset(asset.id, projectId)), 'Removing failed.')
           }}
         >
           Remove from library
         </button>
       </div>
+      {projectId && <MoveButton asset={asset} projectId={projectId} busy={busy} act={act} />}
       <p className="small">
         Measured from the file: {asset.measured.codec || 'unknown codec'}, aspect {asset.measured.aspect_ratio.toFixed(3)} (
         {asset.measured.orientation}). Stored by reference: {asset.filename}.
       </p>
+    </div>
+  )
+}
+
+/** Share this video's asset with every video, or keep a general asset for this video alone. */
+function MoveButton({ asset, projectId, busy, act }: { asset: BrollLibraryAsset; projectId: string; busy: boolean; act: Act }) {
+  const toGeneral = asset.library === 'project'
+  return (
+    <div className="row">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          if (
+            !toGeneral &&
+            !window.confirm(
+              `Make "${asset.display_name}" this video's alone? Other videos can no longer use it, and their B-roll plans that do will report it as missing.`,
+            )
+          )
+            return
+          void act(
+            async () => void (await moveBrollAsset(asset.id, projectId, toGeneral ? 'general' : 'project')),
+            'Moving failed.',
+          )
+        }}
+      >
+        {toGeneral ? 'Share with all videos' : 'Make it this video’s only'}
+      </button>
+      <span className="small hint">
+        {toGeneral ? 'Moves it to the general library.' : 'Moves it out of the general library.'}
+      </span>
     </div>
   )
 }

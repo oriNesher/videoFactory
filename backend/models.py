@@ -175,6 +175,11 @@ class BrollImportRequest(BaseModel):
     path: Any = None
 
 
+class BrollMoveRequest(BaseModel):
+    # "general" (share with every video) or "project" (this video's alone).
+    to: Any = None
+
+
 class BrollSettingsRequest(BaseModel):
     enabled: Any = None
     selected_input: Any = None

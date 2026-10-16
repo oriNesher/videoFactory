@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyCutRecommendation,
+  cancelJob,
   cutMapUrl,
   getCuttingSettings,
   getCuttingState,
@@ -21,8 +22,8 @@ import {
   subtitleUrl,
 } from './api'
 import CutAdvice from './CutAdvice'
-import CutClips from './CutClips'
-import { formatLength, formatSeconds } from './cutFormat'
+import CutClips, { type PendingStatus } from './CutClips'
+import { formatLength, formatSeconds, slotOf } from './cutFormat'
 import type {
   AppliedPlan,
   BoundaryOverride,
@@ -324,10 +325,12 @@ function RunCard({
   projectId,
   run,
   onSubtitles,
+  onCancel,
 }: {
   projectId: string
   run: CutRun
   onSubtitles: RequestSubtitles
+  onCancel: (jobId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [folderError, setFolderError] = useState('')
@@ -369,7 +372,12 @@ function RunCard({
           {needsReview > 0 && (
             <span className="badge warn">{needsReview} need a look</span>
           )}
-          {working && <span className="badge warn">Creating subtitles…</span>}
+          {working && (
+            <span className="working small">
+              <span className="spinner" aria-hidden="true" />
+              Creating subtitles…
+            </span>
+          )}
           {!working && merged?.available && merged.current && (
             <span className="badge ok">
               Subtitles · {merged.current.line_count} lines
@@ -382,7 +390,12 @@ function RunCard({
           )}
         </span>
         <span className="row">
-          {canTranscribe && (
+          {(run.active_jobs ?? []).map((job) => (
+            <button key={job.id} type="button" onClick={() => onCancel(job.id)}>
+              Cancel
+            </button>
+          ))}
+          {canTranscribe && !working && (
             <button
               type="button"
               className="primary"
@@ -573,6 +586,14 @@ type Props = {
   onJobSubmitted: () => void
 }
 
+/** What each cutting-screen job is doing, shown while it runs. */
+const ACTIVE_JOB_TITLES: Record<string, string> = {
+  cut_media: 'Rendering clips and merged video…',
+  cut_sample: 'Rendering previews…',
+  cut_analysis: 'Finding boundaries…',
+  cut_recommendation: 'Asking for a recommendation…',
+}
+
 export default function CuttingPanel({
   project,
   refreshToken,
@@ -757,6 +778,14 @@ export default function CuttingPanel({
   }, [formKey, refreshState, refreshToken])
 
   const jobsActive = (cutState?.active_jobs.length ?? 0) > 0 || pendingJob !== null
+  // Which previews are on their way, so each shows it is being worked on.
+  const pendingSamples = new Map<string, PendingStatus>()
+  for (const job of cutState?.active_jobs ?? []) {
+    for (const request of job.samples ?? []) {
+      const slot = slotOf(request.kind, request.source_id, request.next_source_id)
+      pendingSamples.set(slot, job.status === 'running' ? 'running' : 'queued')
+    }
+  }
 
   useEffect(() => {
     if (!jobsActive) return
@@ -884,6 +913,18 @@ export default function CuttingPanel({
       })
     }
     setBusy(false)
+  }
+
+  /** Stop a job. A running one is asked to stop and ends shortly after. */
+  function cancel(section: Section, jobId: string) {
+    void act(
+      section,
+      async () => {
+        await cancelJob(project.id, jobId)
+        await Promise.all([refreshState(), refreshRuns()])
+      },
+      'Cancelling. Nothing is kept from a cancelled job.',
+    )
   }
 
   /**
@@ -1083,6 +1124,28 @@ export default function CuttingPanel({
 
       {renderNotice('cut')}
 
+      {cutState?.active_jobs.map((job) => (
+        <div className="working-block" key={job.id}>
+          <p className="working">
+            <span className="spinner" aria-hidden="true" />
+            <strong>{ACTIVE_JOB_TITLES[job.type] ?? 'Working'}</strong>
+            {job.status === 'queued' ? ' — waiting for the job before it' : ''}
+            {job.progress_message && ` · ${job.progress_message}`}
+            {job.progress_percent !== null && ` (${Math.round(job.progress_percent)}%)`}
+            <button type="button" className="small" onClick={() => cancel('cut', job.id)}>
+              Cancel
+            </button>
+          </p>
+          <div className="progress">
+            {job.progress_percent !== null ? (
+              <div className="progress-bar" style={{ width: `${job.progress_percent}%` }} />
+            ) : (
+              <div className="progress-bar indeterminate" />
+            )}
+          </div>
+        </div>
+      ))}
+
       <div className="editor-header">
         <h4>{currentMode?.label ?? 'Cut'} settings</h4>
         <button type="button" onClick={restoreDefaults} disabled={busy || !catalog}>
@@ -1145,13 +1208,6 @@ export default function CuttingPanel({
       </div>
 
       {stateError && <p className="message error">{stateError}</p>}
-
-      {cutState?.active_jobs.map((job) => (
-        <p className="hint small" key={job.id}>
-          <span className="badge warn">Working</span> {job.progress_message}
-          {job.progress_percent !== null && ` (${Math.round(job.progress_percent)}%)`}
-        </p>
-      ))}
 
       {boundaryMode && stateMatches && cutState && (
         <>
@@ -1240,6 +1296,7 @@ export default function CuttingPanel({
             projectId={project.id}
             clips={cutState.clips}
             samples={cutState.samples}
+            pending={pendingSamples}
             disabled={busy}
             showAdjustments={adjusting}
             onOverride={setOverride}
@@ -1363,6 +1420,7 @@ export default function CuttingPanel({
             projectId={project.id}
             run={run}
             onSubtitles={requestSubtitles}
+            onCancel={(jobId) => cancel('subtitles', jobId)}
           />
         ))}
       </ul>
