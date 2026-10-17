@@ -222,6 +222,11 @@ class BrollDecisionRequest(BaseModel):
     composition_digest: Any = None
 
 
+class PipelineAcceptRequest(BaseModel):
+    # The candidate token the screen showed: accept exactly that, nothing newer.
+    token: Any = None
+
+
 class StartSubtitlesRequest(BaseModel):
     """The model and the language are fixed by the backend, not requested."""
 

@@ -15,6 +15,10 @@ decisions and the deferred backlog. No transcripts, keys or media go in here.
 - **Next action:** the user reviews the cut (clip order, every opening, ending
   and join) and confirms it, or names the clips to fix. Then go to
   **Captions**.
+- **The editor is now the T-03 stage carousel.** In it: accept **Footage**
+  (8 clips), then accept **Cutting**. The candidate there is cut run `837d1a`'s
+  merged video, which the preview already shows. Then Captions opens by
+  itself.
 
 ## Setup notes (2026-10-15)
 
@@ -32,6 +36,12 @@ decisions and the deferred backlog. No transcripts, keys or media go in here.
     `.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000`.
   - 2026-10-16: both servers had stopped overnight (the log shows no error).
     Both were restarted from the Claude session (backend and `npm.cmd run dev`).
+  - 2026-10-16, later: `--reload` had stopped noticing file changes, so the
+    new `/pipeline` route returned 404. Stopping the reloader left its
+    multiprocessing **server worker** orphaned and still holding port 8000.
+    It had to be stopped too (its parent PID is the old reloader's). Then the
+    backend was started again from the session with the Gemini key visible.
+    No job was running at the time.
 - The frontend (Vite, port 5173) was already running and was left alone. A
   second, stale Vite process also exists; it is harmless.
 - The LLM plan provider is `mock` (demo mode). The trial does not need it,
@@ -106,7 +116,11 @@ priority and the status.
 - **Scope:** general product.
 - **Workaround:** ignore the button. A job started by mistake can now be
   cancelled on the card (small fix 3).
-- **Priority:** medium. **Status:** open.
+- **Priority:** medium. **Status:** **done with T-03 (2026-10-16).** The
+  Subtitles (Whisper) section, the per-run and per-clip **Create subtitles**
+  buttons, the subtitle badges and the SRT track on the cut players are
+  removed from Cutting. Cut runs stay in the Cutting slide. The backend
+  subtitles API is untouched.
 
 ### T-03 — Stage layout: one slide per stage, with a progress bar on top
 
@@ -151,9 +165,41 @@ priority and the status.
     read-only `GET /projects/{id}/pipeline` returns the stage statuses and
     the preview descriptor.
 - **Scope:** general product. **Priority:** high, because it is the main
-  clarity issue the user has raised so far. **Status:** in progress
-  (2026-10-16).
-- **Workaround:** keep scrolling the single page during the trial.
+  clarity issue the user has raised so far. **Status:** **implemented
+  (2026-10-16), awaiting the user's check on screen.**
+- **What was built:**
+  - Backend `pipeline.py` and `api_pipeline.py`:
+    - `GET /projects/{id}/pipeline` returns the stages, the current stage,
+      the number of stages left and the preview.
+    - `POST /projects/{id}/pipeline/{stage}/accept` (footage, cutting,
+      captions) takes the candidate's token, so only exactly what was shown
+      is accepted.
+    - Acceptances are stored in `project.settings["pipeline"]`. A stage is
+      done only on top of a done stage. Zooms count as done when an approved
+      zoom run of the accepted cut exists. B-roll counts as done when it is
+      approved or skipped on that zoomed video, or when B-roll is switched
+      off.
+    - The preview is the zoomed video if one exists, else the accepted (or
+      newest) merged cut, else the first clip. It is composed with
+      `broll.compose`, the same props as the B-roll review and export.
+  - Frontend:
+    - `StageCarousel.tsx`: the stage bar, one slide per stage (all stay
+      mounted), an Accept footer and automatic continuation.
+    - `VideoPreview.tsx`: a sticky Remotion player on the right that polls
+      every 4 s.
+    - The footage list is slide 1. Background jobs sit in a collapsible
+      drawer. `PlanPanel` is no longer shown.
+  - Verified:
+    - `tsc -b` passed. Lint shows no new kinds of warning.
+    - The new `test_pipeline.py` passed (4 tests). The full suite passed
+      (510 tests).
+    - `/pipeline` on the trial project gave the expected state.
+- **Known limits:**
+  - The preview shows *saved* edits. Unsaved caption or B-roll drafts appear
+    in their own slide's player, not in the preview.
+  - The stage panels still have their own video pickers. Choosing a video
+    other than the accepted cut works, but the stage bar follows only the
+    accepted cut.
 
 ### T-02 — Running work shows a spinner and Cancel only in Cutting
 

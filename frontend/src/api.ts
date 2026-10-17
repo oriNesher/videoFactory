@@ -27,6 +27,7 @@ import type {
   Job,
   JobListing,
   LlmStatus,
+  PipelineState,
   PlanListing,
   PlanRevision,
   Project,
@@ -776,4 +777,19 @@ export function brollExportUrl(projectId: string, exportId: string, download = f
 
 export function brollBaseVideoUrl(projectId: string, inputKey: string, download = false) {
   return `${API_BASE}${brollBase(projectId)}/inputs/${inputKey}/video${download ? '?download=true' : ''}`
+}
+
+// --- the stage pipeline ----------------------------------------------------------------
+
+/** Every stage's status and the live preview. Reading never renders anything. */
+export function getPipeline(projectId: string) {
+  return request<PipelineState>(`/projects/${projectId}/pipeline`)
+}
+
+/** Accept exactly the candidate the screen showed (by its token). */
+export function acceptStage(projectId: string, stageId: string, token: string) {
+  return request<PipelineState>(`/projects/${projectId}/pipeline/${stageId}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
 }

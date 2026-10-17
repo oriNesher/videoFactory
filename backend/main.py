@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import api_ai, api_broll, api_captions, api_cutting, api_jobs, api_subtitles, api_zooms, jobs, projects, tools
+from . import api_ai, api_broll, api_captions, api_cutting, api_jobs, api_pipeline, api_subtitles, api_zooms, jobs, projects, tools
 from . import whisper_service
 from . import broll_jobs, broll_planner_jobs, caption_jobs, job_tasks, zoom_jobs  # noqa: F401  - importing them registers the job types
 from .config import WORKSPACE_ENV_VAR, get_workspace_root, load_env_file
@@ -37,6 +37,7 @@ app.include_router(api_zooms.router)
 app.include_router(api_broll.router)
 app.include_router(api_broll.library_router)
 app.include_router(api_ai.router)
+app.include_router(api_pipeline.router)
 
 
 @app.get("/health")

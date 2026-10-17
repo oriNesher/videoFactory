@@ -7,19 +7,15 @@ import {
   getCuttingState,
   getLlmStatus,
   getPlan,
-  getSubtitleSettings,
   listCuttingRuns,
   openRunFolder,
   outputUrl,
   requestCutRecommendation,
   saveCuttingSettings,
   savePlanRevision,
-  saveSubtitleSettings,
   startCuttingAnalysis,
   startCuttingRun,
   startCuttingSamples,
-  startSubtitles,
-  subtitleUrl,
 } from './api'
 import CutAdvice from './CutAdvice'
 import CutClips, { type PendingStatus } from './CutClips'
@@ -27,7 +23,6 @@ import { formatLength, formatSeconds, slotOf } from './cutFormat'
 import type {
   AppliedPlan,
   BoundaryOverride,
-  ClipSubtitles,
   CutClip,
   CutMode,
   CutRecommendation,
@@ -40,7 +35,6 @@ import type {
   LlmStatus,
   Project,
   SampleRequest,
-  SubtitleCatalog,
 } from './types'
 
 /**
@@ -107,62 +101,28 @@ function formatDuration(seconds: number | null | undefined): string {
 
 
 /** Which section of the panel an action's outcome is shown in. */
-type Section = 'cut' | 'advice' | 'subtitles'
+type Section = 'cut' | 'advice' | 'runs'
 
 /**
- * Starts Whisper on one run: its merged video when `outputIds` is null (the
- * job merges the clips first if needed), or the named clips. Undefined while
- * it cannot.
+ * One playable output with its own controls. Plain <video>: captions are made
+ * in the Captions stage, not here.
  */
-type RequestSubtitles =
-  | ((runId: string, outputIds: string[] | null) => void)
-  | undefined
-
-const SUBTITLE_STATUS: Record<string, { label: string; className: string }> = {
-  running: { label: 'Transcribing…', className: 'badge warn' },
-  failed: { label: 'Subtitles failed', className: 'badge bad' },
-  cancelled: { label: 'Subtitles cancelled', className: 'badge' },
-  interrupted: { label: 'Subtitles interrupted', className: 'badge bad' },
-}
-
-/** One playable output with its own controls. Plain <video>: no Remotion yet. */
 function OutputPlayer({
   projectId,
   runId,
   outputId,
   filename,
-  subtitles,
 }: {
   projectId: string
   runId: string
   outputId: string
   filename: string
-  subtitles?: ClipSubtitles
 }) {
-  const current = subtitles?.available ? subtitles.current : null
-
   return (
     <div className="output">
       {/* preload="metadata" keeps a long list of runs cheap to render while
-          still letting the browser show a duration and seek immediately.
-          Keyed on the subtitles' creation time: a browser does not reliably
-          reload a <track> whose src changes, so new subtitles remount it. */}
-      <video
-        key={current?.created_at ?? 'none'}
-        controls
-        preload="metadata"
-        src={outputUrl(projectId, runId, outputId)}
-      >
-        {current && (
-          <track
-            kind="subtitles"
-            default
-            label="Subtitles"
-            srcLang={current.detected_language ?? current.language}
-            src={`${subtitleUrl(projectId, runId, outputId, 'vtt')}?v=${encodeURIComponent(current.created_at)}`}
-          />
-        )}
-      </video>
+          still letting the browser show a duration and seek immediately. */}
+      <video controls preload="metadata" src={outputUrl(projectId, runId, outputId)} />
       <a
         className="download"
         href={outputUrl(projectId, runId, outputId, 'download')}
@@ -170,57 +130,7 @@ function OutputPlayer({
       >
         Download
       </a>
-      {current && (
-        <a
-          className="download"
-          href={subtitleUrl(projectId, runId, outputId, 'srt')}
-          download={current.filename}
-        >
-          Download SRT
-        </a>
-      )}
     </div>
-  )
-}
-
-/** Where one output's subtitles stand, and the button that (re)makes them. */
-function SubtitleControls({
-  runId,
-  outputId,
-  subtitles,
-  onSubtitles,
-}: {
-  runId: string
-  outputId: string
-  subtitles?: ClipSubtitles
-  onSubtitles: RequestSubtitles
-}) {
-  const attempt = subtitles?.attempt
-  const running = attempt?.status === 'running'
-  const status = attempt ? SUBTITLE_STATUS[attempt.status] : undefined
-  const current = subtitles?.available ? subtitles.current : null
-
-  return (
-    <>
-      <div className="row subtitle-row">
-        {current && (
-          <span className="badge ok">
-            Subtitles · {current.line_count} lines
-          </span>
-        )}
-        {status && <span className={status.className}>{status.label}</span>}
-        <button
-          type="button"
-          disabled={!onSubtitles || running}
-          onClick={() => onSubtitles?.(runId, [outputId])}
-        >
-          {current ? 'Redo subtitles' : 'Create subtitles'}
-        </button>
-      </div>
-      {attempt?.error && attempt.status === 'failed' && (
-        <p className="message error">{attempt.error}</p>
-      )}
-    </>
   )
 }
 
@@ -228,14 +138,10 @@ function ClipRow({
   projectId,
   runId,
   clip,
-  subtitles,
-  onSubtitles,
 }: {
   projectId: string
   runId: string
   clip: CutClip
-  subtitles?: ClipSubtitles
-  onSubtitles: RequestSubtitles
 }) {
   const saved =
     clip.source_duration_seconds && clip.duration_seconds !== null
@@ -301,21 +207,12 @@ function ClipRow({
       )}
 
       {clip.playable && clip.filename && (
-        <>
-          <OutputPlayer
-            projectId={projectId}
-            runId={runId}
-            outputId={clip.output_id}
-            filename={clip.filename}
-            subtitles={subtitles}
-          />
-          <SubtitleControls
-            runId={runId}
-            outputId={clip.output_id}
-            subtitles={subtitles}
-            onSubtitles={onSubtitles}
-          />
-        </>
+        <OutputPlayer
+          projectId={projectId}
+          runId={runId}
+          outputId={clip.output_id}
+          filename={clip.filename}
+        />
       )}
     </li>
   )
@@ -324,12 +221,10 @@ function ClipRow({
 function RunCard({
   projectId,
   run,
-  onSubtitles,
   onCancel,
 }: {
   projectId: string
   run: CutRun
-  onSubtitles: RequestSubtitles
   onCancel: (jobId: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -337,15 +232,8 @@ function RunCard({
   // Only a full-clip run has these; a boundary-only run never used them.
   const fullSettings = run.mode === 'full_clip' ? run.settings : null
 
-  // Subtitles are made for the run's merged video. A run without one (cut
-  // before merging was automatic) gets it merged first, inside the same job.
-  const merged = run.subtitles?.combined
   const working = (run.active_jobs ?? []).length > 0
-  const attemptStatus = working ? undefined : merged?.attempt?.status
   const needsReview = run.clips.filter((clip) => clip.boundary?.needs_review).length
-  const canTranscribe =
-    run.status !== 'running' &&
-    (run.combined?.playable || run.clips.some((clip) => clip.playable))
 
   async function showFolder() {
     setFolderError('')
@@ -375,17 +263,7 @@ function RunCard({
           {working && (
             <span className="working small">
               <span className="spinner" aria-hidden="true" />
-              Creating subtitles…
-            </span>
-          )}
-          {!working && merged?.available && merged.current && (
-            <span className="badge ok">
-              Subtitles · {merged.current.line_count} lines
-            </span>
-          )}
-          {attemptStatus && attemptStatus !== 'succeeded' && (
-            <span className={SUBTITLE_STATUS[attemptStatus]?.className ?? 'badge'}>
-              {SUBTITLE_STATUS[attemptStatus]?.label ?? attemptStatus}
+              Working…
             </span>
           )}
         </span>
@@ -395,17 +273,6 @@ function RunCard({
               Cancel
             </button>
           ))}
-          {canTranscribe && !working && (
-            <button
-              type="button"
-              className="primary"
-              disabled={!onSubtitles || working}
-              title="Transcribe this run's merged video with Whisper"
-              onClick={() => onSubtitles?.(run.run_id, null)}
-            >
-              {merged?.available ? 'Redo subtitles' : 'Create subtitles'}
-            </button>
-          )}
           <button type="button" onClick={() => void showFolder()}>
             Open folder
           </button>
@@ -462,7 +329,6 @@ function RunCard({
             runId={run.run_id}
             outputId={run.combined.output_id}
             filename={run.combined.filename}
-            subtitles={merged}
           />
           <p className="hint small mono">
             {formatDuration(run.combined.duration_seconds)}
@@ -472,17 +338,6 @@ function RunCard({
 
       {run.combined && run.combined.status !== 'succeeded' && run.combined.error && (
         <p className="message error">{run.combined.error}</p>
-      )}
-
-      {attemptStatus === 'failed' && merged?.attempt?.error && (
-        <p className="message error">{merged.attempt.error}</p>
-      )}
-
-      {!run.combined?.playable && canTranscribe && (
-        <p className="hint small">
-          This run has no merged video yet. Creating subtitles merges its clips
-          first.
-        </p>
       )}
 
       {open && (
@@ -495,8 +350,6 @@ function RunCard({
                 projectId={projectId}
                 runId={run.run_id}
                 clip={clip}
-                subtitles={run.subtitles?.[clip.output_id]}
-                onSubtitles={onSubtitles}
               />
             ))}
           </ul>
@@ -616,9 +469,6 @@ export default function CuttingPanel({
   const [cutState, setCutState] = useState<CuttingState | null>(null)
   const [stateError, setStateError] = useState('')
 
-  const [subtitleCatalog, setSubtitleCatalog] = useState<SubtitleCatalog | null>(null)
-  const [subtitleSettings, setSubtitleSettings] = useState<Record<string, number>>({})
-
   const [runs, setRuns] = useState<CutRun[]>([])
   const [busy, setBusy] = useState(false)
   // Each section shows its own outcome, next to the button that caused it.
@@ -630,7 +480,7 @@ export default function CuttingPanel({
 
   // The job we just submitted. A queued cut has no run directory yet, so
   // without this the list would sit at the idle poll rate until its manifest
-  // appeared. A merge or subtitle job is listed on its run while active.
+  // appeared. A merge job is listed on its run while active.
   const [watching, setWatching] = useState<{ id: string; kind: 'cut' | 'run' } | null>(
     null,
   )
@@ -691,13 +541,7 @@ export default function CuttingPanel({
 
   const loadSettings = useCallback(async () => {
     try {
-      const [loaded, subtitles] = await Promise.all([
-        getCuttingSettings(project.id),
-        getSubtitleSettings(project.id),
-      ])
-      adopt(loaded)
-      setSubtitleCatalog(subtitles.catalog)
-      setSubtitleSettings(subtitles.settings)
+      adopt(await getCuttingSettings(project.id))
     } catch (caught) {
       setNotice({
         section: 'cut',
@@ -713,7 +557,7 @@ export default function CuttingPanel({
       setRuns(listing.runs)
     } catch (caught) {
       setNotice({
-        section: 'subtitles',
+        section: 'runs',
         kind: 'error',
         text: caught instanceof Error ? caught.message : 'Loading the runs failed.',
       })
@@ -853,48 +697,6 @@ export default function CuttingPanel({
     })
   }
 
-  function setSubtitleParameter(name: string, raw: string) {
-    const value = Number(raw)
-    setSubtitleSettings((current) => ({
-      ...current,
-      [name]: Number.isFinite(value) ? value : current[name],
-    }))
-  }
-
-  function restoreSubtitleDefaults() {
-    if (!subtitleCatalog) return
-    setSubtitleSettings({ ...subtitleCatalog.defaults })
-    setNotice({
-      section: 'subtitles',
-      kind: 'ok',
-      text: 'Defaults restored. Press "Save settings" to keep them.',
-    })
-  }
-
-  const model = subtitleCatalog?.model
-
-  const requestSubtitles: RequestSubtitles =
-    busy || !subtitleCatalog?.installed
-      ? undefined
-      : (runId, outputIds) =>
-          void act(
-            'subtitles',
-            async () => {
-              const job = await startSubtitles(
-                project.id,
-                runId,
-                outputIds,
-                subtitleSettings,
-              )
-              setWatching({ id: job.id, kind: 'run' })
-              notify.current()
-              await refreshRuns()
-            },
-            model && !model.downloaded
-              ? `Subtitles started. The first time, the Hebrew model is downloaded (${model.download}) before transcribing begins.`
-              : 'Subtitles started. Progress is in Background jobs.',
-          )
-
   async function act(
     section: Section,
     action: () => Promise<unknown>,
@@ -971,7 +773,7 @@ export default function CuttingPanel({
         setWatching({ id: job.id, kind: 'cut' })
         await refreshRuns()
       },
-      'Render started. It appears under Cut runs in the Subtitles step.',
+      'Render started. It appears under Cut runs below.',
     )
   }
 
@@ -1046,7 +848,6 @@ export default function CuttingPanel({
   const adjustedCount = Object.keys(overrides).filter((id) => available.includes(id)).length
 
   return (
-    <>
     <section className="panel subpanel">
       <div className="editor-header">
         <h3>Cutting</h3>
@@ -1324,93 +1125,18 @@ export default function CuttingPanel({
           {renderNotice('advice')}
         </>
       )}
-    </section>
-
-    <section className="panel subpanel">
-      <div className="editor-header">
-        <h3>Subtitles (Whisper)</h3>
-        <div className="row">
-          <button
-            type="button"
-            disabled={busy || !subtitleCatalog}
-            onClick={() =>
-              void act(
-                'subtitles',
-                async () => {
-                  const saved = await saveSubtitleSettings(project.id, subtitleSettings)
-                  setSubtitleSettings(saved.settings)
-                },
-                'Settings saved.',
-              )
-            }
-          >
-            Save settings
-          </button>
-          <button
-            type="button"
-            onClick={restoreSubtitleDefaults}
-            disabled={busy || !subtitleCatalog}
-          >
-            Restore defaults
-          </button>
-        </div>
-      </div>
-
-      {model && (
-        <p className="hint small">
-          Hebrew, with {model.label}, on this computer.
-          {!model.downloaded &&
-            ` The first use downloads the model once (${model.download}).`}
-        </p>
-      )}
-
-      {subtitleCatalog && !subtitleCatalog.installed && (
-        <p className="message warn">
-          Whisper is not installed in the backend's Python environment. Stop the
-          backend, run <code>.venv\Scripts\python.exe -m pip install -r requirements.txt</code>,
-          and start it again.
-        </p>
-      )}
-
-      {renderNotice('subtitles')}
-
-      <div className="settings-grid subtitle-grid">
-        {subtitleCatalog?.parameters.map((parameter) => (
-          <label className="field wide" key={parameter.name}>
-            <span className="parameter-label">
-              {parameter.label}
-              <span
-                className="info"
-                tabIndex={0}
-                aria-label={`${parameter.description} (${parameter.unit})`}
-                data-tip={`${parameter.description} (${parameter.unit})`}
-              >
-                i
-              </span>
-            </span>
-            <input
-              type="number"
-              step={parameter.step}
-              min={parameter.min}
-              max={parameter.max}
-              value={subtitleSettings[parameter.name] ?? parameter.default}
-              onChange={(event) =>
-                setSubtitleParameter(parameter.name, event.target.value)
-              }
-            />
-          </label>
-        ))}
-      </div>
 
       <h4>Cut runs ({runs.length})</h4>
 
       <p className="hint small">
-        Press <strong>Create subtitles</strong> on a run to transcribe its merged
-        video. The SRT is saved next to the video and shown on its player.
+        Check the newest run's merged video, then accept it below to continue to
+        Captions.
       </p>
 
+      {renderNotice('runs')}
+
       {runs.length === 0 && (
-        <p className="hint">No runs yet. Run a cut above first.</p>
+        <p className="hint">No runs yet. Render the clips above first.</p>
       )}
 
       <ul className="jobs">
@@ -1419,12 +1145,10 @@ export default function CuttingPanel({
             key={run.run_id}
             projectId={project.id}
             run={run}
-            onSubtitles={requestSubtitles}
-            onCancel={(jobId) => cancel('subtitles', jobId)}
+            onCancel={(jobId) => cancel('runs', jobId)}
           />
         ))}
       </ul>
     </section>
-    </>
   )
 }

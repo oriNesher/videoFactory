@@ -11,7 +11,7 @@ import BrollPanel from './BrollPanel'
 import CaptionsPanel from './CaptionsPanel'
 import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
-import PlanPanel from './PlanPanel'
+import StageCarousel from './StageCarousel'
 import ZoomsPanel from './ZoomsPanel'
 import type { Project, ProjectListing, SourceMedia } from './types'
 
@@ -46,11 +46,13 @@ export default function ProjectsScreen() {
   const [message, setMessage] = useState<Message>(null)
   const [busy, setBusy] = useState(false)
 
-  // Two counters, each bumped to tell the other panel to refetch now instead
-  // of waiting for its next poll: a finished job may have produced a plan, and
-  // a new plan job should appear in the jobs list immediately.
+  // Counters, each bumped to tell another part to refetch now instead of
+  // waiting for its next poll: a new job should appear in the jobs list
+  // immediately, a finished job may have produced a cut run, and either (or a
+  // saved clip list) may have moved a stage or the preview on.
   const [jobsRefresh, setJobsRefresh] = useState(0)
-  const [plansRefresh, setPlansRefresh] = useState(0)
+  const [finishedRefresh, setFinishedRefresh] = useState(0)
+  const [footageRefresh, setFootageRefresh] = useState(0)
 
   const dirty =
     project !== null &&
@@ -178,6 +180,7 @@ export default function ProjectsScreen() {
       }
 
       adoptNewSources(result.project)
+      setFootageRefresh((value) => value + 1)
       setPathInput('')
       setNeedsPathFallback(false)
 
@@ -252,6 +255,7 @@ export default function ProjectsScreen() {
         draftSources.map((source) => source.id),
       )
       adopt(saved)
+      setFootageRefresh((value) => value + 1)
       setMessage({ kind: 'ok', text: 'Saved.' })
       await refreshListing()
     } catch (caught) {
@@ -272,6 +276,127 @@ export default function ProjectsScreen() {
   }
 
   const missingCount = draftSources.filter((source) => !source.exists).length
+  const measured = draftSources.filter(
+    (source) => source.exists && source.duration_seconds != null,
+  )
+  const totalSeconds = measured.reduce((sum, source) => sum + (source.duration_seconds ?? 0), 0)
+  const unmeasured = draftSources.length - measured.length
+
+  /** Slide 1: the clips, their order, and saving that order. */
+  const footage = (
+    <>
+      <div className="editor-header">
+        <h3>Footage ({draftSources.length})</h3>
+        <div className="row">
+          <button
+            type="button"
+            className="primary"
+            disabled={busy}
+            onClick={() => void handleAddFolder()}
+          >
+            {busy ? 'Working…' : 'Upload folder…'}
+          </button>
+          <button type="button" onClick={() => void handleSave()} disabled={busy || !dirty}>
+            Save changes
+          </button>
+          <button type="button" onClick={handleRevert} disabled={busy || !dirty}>
+            Discard changes
+          </button>
+        </div>
+      </div>
+
+      {message && (
+        <p className={`message ${message.kind === 'ok' ? 'ok' : 'error'}`}>
+          {message.text}
+        </p>
+      )}
+
+      {needsPathFallback && (
+        <form
+          className="row"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleAddFolder(pathInput)
+          }}
+        >
+          <input
+            type="text"
+            value={pathInput}
+            placeholder="C:\Videos\shoot-01"
+            onChange={(event) => setPathInput(event.target.value)}
+          />
+          <button type="submit" disabled={busy || !pathInput.trim()}>
+            Add this folder
+          </button>
+        </form>
+      )}
+
+      {missingCount > 0 && (
+        <p className="message error">
+          {missingCount} files are missing. Remove them or put them back.
+        </p>
+      )}
+
+      <ol className="sources">
+        {draftSources.map((source, index) => (
+          <li key={source.id} className={source.exists ? '' : 'missing'}>
+            <span className="index">{index + 1}</span>
+            <span className="details">
+              <span className="filename">
+                {source.filename}
+                {!source.exists && <span className="badge bad">File missing</span>}
+                {source.exists && source.duration_seconds != null && (
+                  <span className="small mono">
+                    {' '}
+                    · {formatDuration(source.duration_seconds)}
+                  </span>
+                )}
+              </span>
+            </span>
+            <span className="row">
+              <button
+                type="button"
+                className="vlc"
+                onClick={() => void handleOpenInVlc(source.id)}
+                disabled={!source.exists}
+                title="Open in VLC"
+              >
+                VLC
+              </button>
+              <button
+                type="button"
+                onClick={() => move(index, -1)}
+                disabled={index === 0}
+                title="Move up"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                onClick={() => move(index, 1)}
+                disabled={index === draftSources.length - 1}
+                title="Move down"
+              >
+                ↓
+              </button>
+              <button type="button" onClick={() => remove(source.id)}>
+                Remove
+              </button>
+            </span>
+          </li>
+        ))}
+      </ol>
+
+      {draftSources.length > 0 && (
+        <p className="small">
+          Total length: <span className="mono">{formatDuration(totalSeconds)}</span>
+          {unmeasured > 0 && ` (${unmeasured} clips without a known length are not counted)`}
+        </p>
+      )}
+
+      {draftSources.length === 0 && <p className="hint">No footage yet.</p>}
+    </>
+  )
 
   return (
     <div className="projects">
@@ -338,170 +463,55 @@ export default function ProjectsScreen() {
                 {project.name} video
                 {dirty && <span className="badge warn">Unsaved changes</span>}
               </h2>
-              <div className="row">
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => void handleSave()}
-                  disabled={busy || !dirty}
-                >
-                  Save changes
-                </button>
-                <button type="button" onClick={handleRevert} disabled={busy || !dirty}>
-                  Discard changes
-                </button>
-              </div>
             </div>
 
-            {message && (
-              <p className={`message ${message.kind === 'ok' ? 'ok' : 'error'}`}>
-                {message.text}
-              </p>
-            )}
-
-            <div className="editor-header">
-              <h3>Footage ({draftSources.length})</h3>
-              <button
-                type="button"
-                className="primary"
-                disabled={busy}
-                onClick={() => void handleAddFolder()}
-              >
-                {busy ? 'Working…' : 'Upload folder…'}
-              </button>
-            </div>
-
-            {needsPathFallback && (
-              <form
-                className="row"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  void handleAddFolder(pathInput)
-                }}
-              >
-                <input
-                  type="text"
-                  value={pathInput}
-                  placeholder="C:\Videos\shoot-01"
-                  onChange={(event) => setPathInput(event.target.value)}
-                />
-                <button type="submit" disabled={busy || !pathInput.trim()}>
-                  Add this folder
-                </button>
-              </form>
-            )}
-
-            {missingCount > 0 && (
-              <p className="message error">
-                {missingCount} files are missing. Remove them or put them back.
-              </p>
-            )}
-
-            <ol className="sources">
-              {draftSources.map((source, index) => (
-                <li key={source.id} className={source.exists ? '' : 'missing'}>
-                  <span className="index">{index + 1}</span>
-                  <span className="details">
-                    <span className="filename">
-                      {source.filename}
-                      {!source.exists && <span className="badge bad">File missing</span>}
-                      {source.exists && source.duration_seconds != null && (
-                        <span className="small mono">
-                          {' '}
-                          · {formatDuration(source.duration_seconds)}
-                        </span>
-                      )}
-                    </span>
-                  </span>
-                  <span className="row">
-                    <button
-                      type="button"
-                      className="vlc"
-                      onClick={() => void handleOpenInVlc(source.id)}
-                      disabled={!source.exists}
-                      title="Open in VLC"
-                    >
-                      VLC
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(index, -1)}
-                      disabled={index === 0}
-                      title="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(index, 1)}
-                      disabled={index === draftSources.length - 1}
-                      title="Move down"
-                    >
-                      ↓
-                    </button>
-                    <button type="button" onClick={() => remove(source.id)}>
-                      Remove
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ol>
-
-            {draftSources.length > 0 && (() => {
-              const measured = draftSources.filter(
-                (source) => source.exists && source.duration_seconds != null,
-              )
-              const total = measured.reduce((sum, source) => sum + (source.duration_seconds ?? 0), 0)
-              const unknown = draftSources.length - measured.length
-              return (
-                <p className="small">
-                  Total length: <span className="mono">{formatDuration(total)}</span>
-                  {unknown > 0 && ` (${unknown} clips without a known length are not counted)`}
-                </p>
-              )
-            })()}
-
-            {draftSources.length === 0 && (
-              <p className="hint">No footage yet.</p>
-            )}
-
-            <CuttingPanel
-              key={`cutting-${project.id}`}
-              project={project}
-              refreshToken={plansRefresh}
-              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
-            />
-
-            <CaptionsPanel
-              key={`captions-${project.id}`}
-              project={project}
-              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
-            />
-
-            <ZoomsPanel
-              key={`zooms-${project.id}`}
-              project={project}
-              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
-            />
-
-            <BrollPanel
-              key={`broll-${project.id}`}
-              project={project}
-              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
-            />
-
-            <JobsPanel
+            <StageCarousel
+              key={`stages-${project.id}`}
               projectId={project.id}
-              refreshToken={jobsRefresh}
-              onJobFinished={() => setPlansRefresh((value) => value + 1)}
+              refreshSignal={jobsRefresh + finishedRefresh + footageRefresh}
+              footageHold={dirty ? 'Save or discard the changes to the clip list first.' : null}
+              slides={{
+                footage,
+                cutting: (
+                  <CuttingPanel
+                    key={`cutting-${project.id}`}
+                    project={project}
+                    refreshToken={finishedRefresh}
+                    onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+                  />
+                ),
+                captions: (
+                  <CaptionsPanel
+                    key={`captions-${project.id}`}
+                    project={project}
+                    onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+                  />
+                ),
+                zooms: (
+                  <ZoomsPanel
+                    key={`zooms-${project.id}`}
+                    project={project}
+                    onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+                  />
+                ),
+                broll: (
+                  <BrollPanel
+                    key={`broll-${project.id}`}
+                    project={project}
+                    onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+                  />
+                ),
+              }}
             />
 
-            <PlanPanel
-              key={`plan-${project.id}`}
-              project={project}
-              refreshToken={plansRefresh}
-              onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
-            />
+            <details className="jobs-drawer">
+              <summary>Background jobs</summary>
+              <JobsPanel
+                projectId={project.id}
+                refreshToken={jobsRefresh}
+                onJobFinished={() => setFinishedRefresh((value) => value + 1)}
+              />
+            </details>
           </>
         )}
       </section>

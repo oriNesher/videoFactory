@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -)"
+      "Bash(python -)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest backend/tests/test_pipeline.py -x -q 2>&1)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest backend/tests/test_pipeline.py -q 2>&1)",
+      "PowerShell(npx.cmd tsc -b 2>&1)",
+      "PowerShell(npm.cmd run lint --silent 2>&1)"
     ]
   }
 }

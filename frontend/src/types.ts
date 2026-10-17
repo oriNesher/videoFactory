@@ -1314,3 +1314,40 @@ export type BrollInputState = {
   planner: BrollPlannerState
   revisions: BrollRevisionSummary[]
 }
+
+// --- the stage pipeline (editor shell) ---------------------------------------------
+
+export type StageId = 'footage' | 'cutting' | 'captions' | 'zooms' | 'broll'
+
+export type PipelineStage = {
+  id: StageId
+  label: string
+  /** Footage, cutting and captions are accepted from the stage bar's footer. */
+  accepted_here: boolean
+  done: boolean
+  /** What "Accept" would accept now, with the token to send back. */
+  candidate: ({ token: string; summary: string } & Record<string, unknown>) | null
+  blocked_reason: string | null
+  acceptance: ({ accepted_at: string } & Record<string, unknown>) | null
+  outdated_reason: string | null
+  summary: string
+}
+
+export type PipelinePreview = {
+  stage: StageId
+  key: string
+  label: string | null
+  /** The composition without media URLs, exactly like the B-roll review. */
+  props: BrollComposedProps | null
+  digest: string | null
+  assets?: Record<string, { digest: string }>
+  error: string | null
+}
+
+export type PipelineState = {
+  stages: PipelineStage[]
+  /** The first stage not done; null when the video is finished. */
+  current_stage: StageId | null
+  stages_left: number
+  preview: PipelinePreview | null
+}
