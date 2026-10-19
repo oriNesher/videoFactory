@@ -6,13 +6,15 @@
 - **Outdating** — a change to the clips, the merged video or the captions
   reopens that stage and everything after it, without deleting anything.
 - **Preview** — always the furthest video reached (first clip, merged cut,
-  zoomed video), composed with the current captions like the B-roll review.
+  zoomed video), composed with the current captions like the B-roll review,
+  and from the music stage on with the chosen music.
 
 The cut is real FFmpeg-free plumbing: the tool runner is stubbed to copy a
 small generated clip, so the merged video is a real, probe-able file.
 """
 
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -89,8 +91,8 @@ def cut(client, project_id) -> str:
 
 def test_an_empty_video_starts_at_footage_with_nothing_to_accept_or_preview(client, project):
     state = pipeline(client, project["id"])
-    assert [entry["id"] for entry in state["stages"]] == ["footage", "cutting", "captions", "zooms", "broll"]
-    assert state["current_stage"] == "footage" and state["stages_left"] == 5
+    assert [entry["id"] for entry in state["stages"]] == ["footage", "cutting", "captions", "zooms", "broll", "music"]
+    assert state["current_stage"] == "footage" and state["stages_left"] == 6
     assert stage(state, "footage")["candidate"] is None
     assert "Add the clips" in stage(state, "footage")["blocked_reason"]
     assert state["preview"] is None
@@ -137,7 +139,7 @@ def test_stages_are_accepted_in_order_and_the_preview_follows_the_furthest_resul
 
     state = accept(client, pid, "captions").json()
     assert stage(state, "captions")["done"] and state["current_stage"] == "zooms"
-    assert state["stages_left"] == 2
+    assert state["stages_left"] == 3
     accepted = client.get(f"/projects/{pid}").json()["settings"]["pipeline"]
     assert set(accepted) == {"footage", "cutting", "captions"}
     assert accepted["captions"]["transcript_id"] == candidate["transcript_id"]
@@ -169,7 +171,7 @@ def test_a_change_upstream_reopens_that_stage_and_everything_after_it(
     shutil.copyfile(grid, second)
     add_source(client, pid, second)
     state = pipeline(client, pid)
-    assert state["current_stage"] == "footage" and state["stages_left"] == 5
+    assert state["current_stage"] == "footage" and state["stages_left"] == 6
     assert "changed after they were accepted" in stage(state, "footage")["outdated_reason"]
     assert "not accepted" in stage(state, "cutting")["outdated_reason"]
     # Nothing was thrown away: re-accepting the footage restores the rest.
@@ -178,7 +180,7 @@ def test_a_change_upstream_reopens_that_stage_and_everything_after_it(
 
 
 def test_an_approved_zoom_is_the_preview_and_hands_over_to_b_roll(
-    client, project, grid, copying_tools, fake_whisper, planner,
+    client, project, grid, copying_tools, fake_whisper, planner, tmp_path,
 ):
     pid = project["id"]
     add_source(client, pid, grid)
@@ -201,7 +203,24 @@ def test_an_approved_zoom_is_the_preview_and_hands_over_to_b_roll(
     assert state["preview"]["stage"] == "broll"
     assert zooms.read_approval(pid, run_id) is not None
 
-    # B-roll switched off: approving the zoom finishes the video.
+    # B-roll switched off: approving the zoom continues to the music stage,
+    # and with that off too it finishes the video.
     client.put(f"/projects/{pid}/broll/settings", json={"enabled": False})
+    state = pipeline(client, pid)
+    assert stage(state, "broll")["done"] and state["current_stage"] == "music"
+    assert state["preview"]["stage"] == "music" and state["preview"]["props"]["music"] is None
+
+    # A chosen track is in the preview at once, the way the export will mix it.
+    track_file = tmp_path / "מנגינה.mp3"
+    subprocess.run(["ffmpeg.exe", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=duration=3",
+                    str(track_file)], check=True)
+    track = client.post("/audio/library/imports", json={"path": str(track_file)}).json()["asset"]
+    client.put(f"/projects/{pid}/music/settings", json={"track_id": track["id"], "volume_percent": 20})
+    preview = pipeline(client, pid)["preview"]
+    assert preview["props"]["music"]["asset"]["id"] == track["id"] and preview["props"]["music"]["volume"] == 0.2
+    assert preview["music"] == {"id": track["id"], "digest": track["fingerprint"]["digest"]}
+    assert not stage(pipeline(client, pid), "music")["done"]
+
+    client.put(f"/projects/{pid}/music/settings", json={"enabled": False})
     state = pipeline(client, pid)
     assert state["current_stage"] is None and state["stages_left"] == 0

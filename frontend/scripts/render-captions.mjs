@@ -19,6 +19,10 @@
 //   "assets": [{ "id": "<library asset id>", "path": "C:\…\screen.mp4" }]
 // and props.broll.placements[].asset.id names which of them each placement shows.
 //
+// The final export after the music stage (backend/music_jobs.py) adds
+//   "music": { "id": "<audio library id>", "path": "C:\…\calm.mp3" }   (or null)
+// and props.music.asset.id names it.
+//
 // Media access. The composition needs a URL for the video (and for each B-roll
 // asset). This script serves exactly the snapshot's files — the input and the
 // listed assets — on 127.0.0.1, on a random port, under a random token, for as
@@ -54,6 +58,7 @@ const BUNDLE_INPUTS = [
   path.join(FRONTEND, 'src', 'remotion'),
   path.join(FRONTEND, 'src', 'captions'),
   path.join(FRONTEND, 'src', 'broll'),
+  path.join(FRONTEND, 'src', 'music'),
   path.join(FRONTEND, 'package-lock.json'),
 ]
 const COMPOSITION_ID = 'CaptionedVideo'
@@ -157,7 +162,8 @@ async function ensureHeadlessBrowser(allowDownload) {
 const CONTENT_TYPES = {
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
   '.mkv': 'video/x-matroska', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
+  '.webp': 'image/webp', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac',
 }
 
 // `files` maps a name to an absolute path. Each is served at
@@ -253,9 +259,15 @@ async function render(jobPath) {
     if (!/^[0-9a-f]{12}$/.test(asset.id)) throw new Error(`Invalid asset id: ${asset.id}`)
     if (!existsSync(asset.path)) throw new Error(`A B-roll file is missing: ${asset.path}`)
   }
+  const music = job.music ?? null
+  if (music) {
+    if (!/^[0-9a-f]{12}$/.test(music.id)) throw new Error(`Invalid music id: ${music.id}`)
+    if (!existsSync(music.path)) throw new Error(`The music file is missing: ${music.path}`)
+  }
   const { server, urls } = await serveFiles({
     input: job.input_path,
     ...Object.fromEntries(assets.map((asset) => [`asset-${asset.id}`, asset.path])),
+    ...(music ? { music: music.path } : {}),
   })
   try {
     const { renderMedia, selectComposition } = await import('@remotion/renderer')
@@ -269,6 +281,11 @@ async function render(jobPath) {
           return { ...placement, asset: { ...placement.asset, src } }
         }),
       }
+    }
+
+    if (job.props.music) {
+      if (!music || music.id !== job.props.music.asset.id) throw new Error('The music in the props is not in the snapshot.')
+      inputProps.music = { ...job.props.music, asset: { ...job.props.music.asset, src: urls.music } }
     }
 
     emit({ event: 'stage', stage: 'composition' })

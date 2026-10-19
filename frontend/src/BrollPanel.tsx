@@ -1,14 +1,11 @@
-import { Player, type PlayerRef } from '@remotion/player'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   addBrollPlacement,
   applyBrollPlanningRun,
-  brollAssetMediaUrl,
   brollBaseVideoUrl,
   brollExportUrl,
   cancelJob,
   captionExportUrl,
-  captionInputStreamUrl,
   decideBroll,
   getBrollInput,
   getBrollLibrary,
@@ -21,11 +18,11 @@ import {
   startBrollPlanning,
   updateBrollPlacement,
 } from './api'
-import BrollLibrary from './BrollLibrary'
-import { describeAsset } from './brollFormat'
+import BrollTimelineTable from './BrollTimelineTable'
+import LibraryWindow from './LibraryWindow'
+import { usePreviewBridge } from './previewBridge'
+import { describeAsset, fitsFullFrame } from './brollFormat'
 import { formatTime } from './captionFormat'
-import { CaptionedVideo } from './captions/CaptionedVideo'
-import type { CaptionedVideoProps } from './captions/types'
 import type {
   BrollInputState,
   BrollLibraryAsset,
@@ -63,9 +60,11 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   const [frame, setFrame] = useState(0)
   const [assetChoice, setAssetChoice] = useState('')
   const [templateChoice, setTemplateChoice] = useState('fullframe')
-  const [libraryOpen, setLibraryOpen] = useState(false)
-  const playerRef = useRef<PlayerRef>(null)
-  const libraryRef = useRef<HTMLDetailsElement>(null)
+  const [libraryWindow, setLibraryWindow] = useState<'video' | 'general' | null>(null)
+  // The shared preview beside the slide plays the composed video (it is
+  // the same composition as the export); this slide moves and follows it.
+  const bridge = usePreviewBridge()
+  useEffect(() => bridge.subscribeFrame((value) => setFrame(value)), [bridge])
 
   const loadStatus = useCallback(async () => {
     const loaded = await getBrollStatus(projectId)
@@ -128,17 +127,6 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
     return () => window.clearInterval(interval)
   }, [refresh, planning, exporting])
 
-  useEffect(() => {
-    const player = playerRef.current
-    if (!player) return
-    const listener = (event: { detail: { frame: number } }) => setFrame(event.detail.frame)
-    player.addEventListener('frameupdate', listener)
-    player.addEventListener('seeked', listener)
-    return () => {
-      player.removeEventListener('frameupdate', listener)
-      player.removeEventListener('seeked', listener)
-    }
-  }, [state?.composition_digest])
 
   async function act(action: () => Promise<void>, fallback: string) {
     setBusy(true)
@@ -154,26 +142,6 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   }
 
   const props = state?.props ?? null
-  const digest = state?.input.fingerprint?.digest ?? ''
-  const inputProps = useMemo<CaptionedVideoProps | null>(() => {
-    if (!props || !selectedKey || !state) return null
-    return {
-      ...props,
-      video: { ...props.video, src: `${captionInputStreamUrl(projectId, selectedKey)}?v=${digest.slice(7, 19)}` },
-      broll: props.broll
-        ? {
-            ...props.broll,
-            placements: props.broll.placements.map((placement) => ({
-              ...placement,
-              asset: {
-                ...placement.asset,
-                src: brollAssetMediaUrl(placement.asset.id, state.assets[placement.asset.id]?.fingerprint.digest ?? '', projectId),
-              },
-            })),
-          }
-        : null,
-    } as CaptionedVideoProps
-  }, [props, selectedKey, state, projectId, digest])
 
   if (!status) {
     return (
@@ -197,11 +165,30 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   const nameOf = (assetId: string) =>
     state?.assets[assetId]?.display_name ?? library.assets.find((asset) => asset.id === assetId)?.display_name ?? 'Missing asset'
   const issueFor = (placementId: string) => state?.issues.find((issue) => issue.placement_id === placementId)
+  // Only an asset shaped like the video may be full-frame (the backend enforces it too).
+  const frameSize = state?.input.composition ?? null
+  const fitsFrame = (assetId: string | undefined) =>
+    !!frameSize &&
+    !!assetId &&
+    fitsFullFrame(
+      state?.assets[assetId] ?? library.assets.find((asset) => asset.id === assetId),
+      frameSize.width,
+      frameSize.height,
+    )
+  const chosenFits = fitsFrame(chosenAsset?.id)
+  const effectiveTemplate = templateChoice === 'fullframe' && !chosenFits ? 'pip' : templateChoice
   const provider = status.provider
 
+  /** Open the library that has assets waiting for a description. */
   function openLibrary() {
-    setLibraryOpen(true)
-    window.setTimeout(() => libraryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    const ownUndescribed = library.assets.some((asset) => asset.library === 'project' && !asset.described)
+    setLibraryWindow(ownUndescribed ? 'video' : 'general')
+  }
+
+  async function closeLibrary() {
+    setLibraryWindow(null)
+    await loadLibrary()
+    await refresh()
   }
 
   async function choose(key: string) {
@@ -247,7 +234,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
       await addBrollPlacement(projectId, selectedKey, {
         asset_id: chosenAsset.id,
         at_seconds: playhead,
-        template_id: templateChoice,
+        template_id: effectiveTemplate,
         base_revision: revision,
       })
       await refresh()
@@ -276,7 +263,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
       const result = await decideBroll(projectId, selectedKey, kind, state.composition_digest!)
       const next = result.next
       setMessage(
-        next.kind === 'final' || next.kind === 'blocked'
+        next.kind === 'final' || next.kind === 'blocked' || next.kind === 'music'
           ? { kind: next.kind === 'blocked' ? 'warn' : 'ok', text: next.message }
           : {
               kind: 'ok',
@@ -292,7 +279,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
   }
 
   function seek(seconds: number) {
-    playerRef.current?.seekTo(Math.round(seconds * fps))
+    bridge.seek(seconds)
   }
 
   const composition = state?.input.composition ?? null
@@ -309,6 +296,26 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
           {provider.ready ? '' : ' — not configured'}
         </span>
       </div>
+      <div className="row library-buttons">
+        <button type="button" onClick={() => setLibraryWindow('video')}>
+          This video&apos;s assets ({library.assets.filter((asset) => asset.library === 'project').length})
+        </button>
+        <button type="button" onClick={() => setLibraryWindow('general')}>
+          General library ({library.assets.filter((asset) => asset.library === 'general').length})
+        </button>
+        {library.assets.some((asset) => !asset.described) && (
+          <span className="badge warn">Some assets need a description</span>
+        )}
+      </div>
+      {libraryWindow && (
+        <LibraryWindow
+          projectId={projectId}
+          videoName={project.name}
+          which={libraryWindow}
+          onClose={() => void closeLibrary()}
+        />
+      )}
+
       {message && <p className={`message ${message.kind}`}>{message.text}</p>}
 
       <div className="row">
@@ -374,30 +381,16 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
         />
       )}
 
-      {state?.available && inputProps && composition && (
+      {state?.available && props && composition && (
         <>
-          <div className="caption-preview" style={{ maxWidth: `calc(60vh * ${composition.width / composition.height})` }}>
-            <Player
-              ref={playerRef}
-              component={CaptionedVideo}
-              inputProps={inputProps}
-              durationInFrames={composition.duration_in_frames}
-              compositionWidth={composition.width}
-              compositionHeight={composition.height}
-              fps={composition.fps}
-              controls
-              clickToPlay
-              spaceKeyToPlayOrPause
-              acknowledgeRemotionLicense
-              style={{ width: '100%' }}
-            />
-          </div>
-          <p className="small hint">
-            This preview is the export&apos;s own composition: B-roll over the video
-            {state.input.kind === 'zoom' ? ' (already zoomed — B-roll and captions are not zoomed)' : ''}, under the
-            captions. The speaker&apos;s audio plays once, unchanged; B-roll is muted.{' '}
-            {state.captions ? `Captions: revision ${state.captions.revision}.` : 'No captions for this video.'}
-          </p>
+          <BrollTimelineTable
+            captions={props.captions}
+            placements={placements}
+            duration={composition.duration_in_frames / composition.fps}
+            playhead={playhead}
+            nameOf={nameOf}
+            onSeek={seek}
+          />
 
           {plan && <ResultSummary plan={plan} run={run} editedSince={!!planner?.edited_since} duration={composition.duration_in_frames / composition.fps} />}
 
@@ -434,6 +427,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
                     name={nameOf(placement.asset_id)}
                     explanation={run?.explanations[placement.id] ?? null}
                     templates={status.templates}
+                    fullFrameAllowed={fitsFrame(placement.asset_id)}
                     issue={issueFor(placement.id)?.message ?? null}
                     busy={busy || planning}
                     onSeek={() => seek(placement.start)}
@@ -455,9 +449,14 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
                     </option>
                   ))}
                 </select>
-                <select value={templateChoice} onChange={(event) => setTemplateChoice(event.target.value)} aria-label="Template">
+                <select value={effectiveTemplate} onChange={(event) => setTemplateChoice(event.target.value)} aria-label="Template">
                   {status.templates.map((template) => (
-                    <option key={template.id} value={template.id}>
+                    <option
+                      key={template.id}
+                      value={template.id}
+                      disabled={template.id === 'fullframe' && !chosenFits}
+                      title={template.id === 'fullframe' && !chosenFits ? 'Only an asset shaped like the video can fill the frame' : undefined}
+                    >
                       {template.label}
                     </option>
                   ))}
@@ -518,26 +517,6 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
         </>
       )}
 
-      <details
-        className="broll-library-section"
-        ref={libraryRef}
-        open={libraryOpen}
-        onToggle={(event) => setLibraryOpen((event.target as HTMLDetailsElement).open)}
-      >
-        <summary>
-          Asset library ({library.assets.length}) — this video's own and the general library
-          {library.assets.some((asset) => !asset.described) ? ' · some assets need a description' : ''}
-        </summary>
-        <BrollLibrary
-          projectId={projectId}
-          assets={library.assets}
-          storageNote={library.storage_note}
-          onChanged={async () => {
-            await loadLibrary()
-            await refresh()
-          }}
-        />
-      </details>
 
       <details>
         <summary>Settings and templates</summary>
@@ -553,7 +532,7 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
               }, 'Saving failed.')
             }
           />
-          Continue to B-roll after a zoom result is approved (off: approving zooms exports right away)
+          Continue to B-roll after a zoom result is approved (off: approving zooms goes straight to the next step)
         </label>
         <label className="field">
           <span>How much B-roll to aim for (applies to the next plan)</span>
@@ -759,6 +738,7 @@ function PlacementRow({
   name,
   explanation,
   templates,
+  fullFrameAllowed,
   issue,
   busy,
   onSeek,
@@ -769,6 +749,8 @@ function PlacementRow({
   name: string
   explanation: { rationale: string; spoken_text: string | null } | null
   templates: BrollStatus['templates']
+  /** Whether this placement's asset is shaped like the video. */
+  fullFrameAllowed: boolean
   issue: string | null
   busy: boolean
   onSeek: () => void
@@ -794,7 +776,11 @@ function PlacementRow({
           aria-label="Template"
         >
           {templates.map((item) => (
-            <option key={item.id} value={item.id}>
+            <option
+              key={item.id}
+              value={item.id}
+              disabled={item.id === 'fullframe' && !fullFrameAllowed && placement.template_id !== 'fullframe'}
+            >
               {item.label}
             </option>
           ))}
@@ -848,7 +834,10 @@ function PlacementRow({
         </div>
         {template &&
           Object.entries(template.settings).map(([key, spec]) => {
-            const value = placement.settings[key]
+            // Plans saved before a setting existed do not have it: show its default.
+            const value = placement.settings[key] ?? spec.default
+            // The free position's two numbers only matter for a custom position.
+            if ((key === 'x_percent' || key === 'y_percent') && placement.settings.position !== 'custom') return null
             if (spec.type === 'boolean')
               return (
                 <label key={key} className="choice" title={spec.description}>
@@ -974,6 +963,7 @@ function Continuation({
       </div>
     )
   if (next.kind === 'blocked') return <p className="message warn">{next.message}</p>
+  if (next.kind === 'music') return <p className="small hint">{next.message}</p>
   const record = next.export
   if (next.job && !record)
     return (

@@ -41,7 +41,13 @@ from backend import (  # noqa: E402
 from backend.config import WORKSPACE_ENV_VAR  # noqa: E402
 from backend.main import app  # noqa: E402
 
-GROUPING = captions.default_grouping()
+# The grouping rules are tested with five words per caption, independently of
+# the shipped default (two since the real-world trial).
+GROUPING = {**captions.default_grouping(), "max_words": 5}
+
+
+def test_the_default_is_two_words_per_caption():
+    assert captions.default_grouping()["max_words"] == 2
 
 needs_ffmpeg = pytest.mark.skipif(
     not (shutil.which("ffmpeg.exe") and shutil.which("ffprobe.exe")),

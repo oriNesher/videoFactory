@@ -356,7 +356,10 @@ export default function ZoomsPanel({ project, onJobSubmitted }: { project: Proje
           )}
 
           {review?.approved && !continuation && status.broll_enabled && (
-            <p className="small hint">Next step: B-roll, below — planned automatically. Approve or skip it there to export.</p>
+            <p className="small hint">Next step: B-roll, below — planned automatically. Approve or skip it there to continue.</p>
+          )}
+          {review?.approved && !continuation && !status.broll_enabled && status.music_enabled && (
+            <p className="small hint">Next step: background music. Choose a track there, or continue without music, to export.</p>
           )}
           {review?.approved && (
             <div className="row">

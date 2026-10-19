@@ -1470,12 +1470,11 @@ a.button.primary {
   display: none;
 }
 
+/* The stage's Accept bar: at the top of the slide, under the slide title. */
 .stage-footer {
-  position: sticky;
-  bottom: 0;
-  margin-top: 16px;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--border);
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
 
@@ -1551,4 +1550,326 @@ a.button.primary {
   .stage-step.active .stage-name {
     display: inline;
   }
+}
+
+/* --- real-world trial: stage lock, captions text table ---------------------- */
+
+.stage-step:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.stage-step:disabled:hover {
+  border-color: transparent;
+}
+
+/* The captions text table scrolls inside a box as tall as the preview panel
+   (set from the panel's measured height; this is the fallback). */
+.caption-table-box {
+  max-height: 75vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0 16px;
+}
+
+.caption-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.caption-actions {
+  margin-bottom: 8px;
+}
+
+.caption-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.caption-table th {
+  text-align: start;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.caption-table td {
+  padding: 1px 4px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+/* The time column: as narrow as its text, never wrapped (start–end on one line). */
+.caption-table td.time {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.caption-table input {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 13px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.caption-table input:focus {
+  border-color: var(--accent-border);
+  background: var(--bg);
+}
+
+.caption-table input.invalid {
+  border-color: var(--bad, #c33);
+}
+
+.caption-table tr.active td {
+  background: var(--accent-bg);
+}
+
+.caption-table button.link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.caption-table button.link:hover {
+  text-decoration: underline;
+}
+
+/* --- B-roll library window -------------------------------------------------- */
+
+.library-buttons {
+  margin-bottom: 8px;
+}
+
+.library-window {
+  width: min(1100px, 94vw);
+  max-height: 90vh;
+  padding: 0 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.library-window::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+
+.library-window-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.library-window-header h3 {
+  margin: 0;
+  flex: 1;
+}
+
+.library-window-add {
+  padding: 12px 0 4px;
+}
+
+.library-window-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.library-window-list > li {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.library-window-list > li.needs-description {
+  border-color: var(--warn);
+}
+
+.library-window-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .library-window-list > li {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- B-roll timeline table (read-only) -------------------------------------- */
+
+.broll-timeline tbody tr {
+  cursor: pointer;
+}
+
+.broll-timeline td {
+  height: 22px;
+}
+
+.broll-timeline-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 0;
+  width: 100%;
+}
+
+.broll-timeline .broll-layer-head,
+.broll-timeline .broll-layer {
+  width: 26px;
+  min-width: 26px;
+  padding: 0;
+  text-align: center;
+}
+
+.broll-timeline .broll-layer {
+  position: relative;
+  border-left: 1px solid var(--border);
+}
+
+.broll-block {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  opacity: 0.9;
+  cursor: pointer;
+}
+
+.broll-block.starts {
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+}
+
+.broll-block.ends {
+  border-bottom-left-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.broll-block:hover {
+  opacity: 1;
+  outline: 1px solid var(--text-h);
+}
+
+/* One-line asset fields in the library window: description takes the room. */
+.asset-editor.compact {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1.2fr) minmax(0, 1.2fr);
+  gap: 4px 8px;
+  align-items: end;
+}
+
+.asset-editor.compact .field {
+  margin: 0;
+  gap: 2px;
+}
+
+.asset-editor.compact .field > span {
+  font-size: 12px;
+}
+
+.asset-editor.compact input,
+.asset-editor.compact textarea {
+  padding: 3px 6px;
+  font-size: 13px;
+}
+
+.asset-editor.compact textarea {
+  resize: vertical;
+  min-height: 0;
+}
+
+.asset-editor.compact .field:has(textarea) {
+  grid-column: 1 / -1;
+}
+
+.asset-editor.compact .asset-editor-buttons {
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.asset-editor.compact .asset-editor-buttons button {
+  padding: 3px 10px;
+  font-size: 13px;
+}
+
+.library-window-info .broll-thumb {
+  max-height: 70px;
+}
+
+@media (max-width: 760px) {
+  .asset-editor.compact {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- background music (stage 4) ------------------------------------------- */
+
+.music details {
+  margin-top: 12px;
+}
+
+.music details summary {
+  cursor: pointer;
+}
+
+.music-tracks {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.music-tracks li {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.music-tracks li.invalid {
+  border-color: var(--bad-border);
+}
+
+.music-track-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.music-mix {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  column-gap: 16px;
+}
+
+.music-mix .field {
+  margin: 8px 0;
+}
+
+.music-path {
+  flex: 1 1 16rem;
+  min-width: 0;
 }

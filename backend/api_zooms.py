@@ -10,7 +10,7 @@ all already exist returns the finished result without queueing anything.
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from . import broll, broll_planner_jobs, caption_inputs, caption_jobs, cutting, jobs, storage, zoom_jobs, zoom_planner, zooms
+from . import broll, broll_planner_jobs, caption_inputs, caption_jobs, cutting, jobs, music, storage, zoom_jobs, zoom_planner, zooms
 from .models import ZoomApproveRequest, ZoomSettingsRequest, ZoomStartRequest
 
 router = APIRouter(prefix="/projects/{project_id}/zooms", tags=["zooms"])
@@ -75,6 +75,8 @@ def status(project_id: str):
         "selected_input": selected,
         # Whether approving continues to the B-roll step (stage 3A) or exports.
         "broll_enabled": broll.read_settings(project)["enabled"],
+        # With B-roll off: whether approving continues to the music stage (stage 4).
+        "music_enabled": music.read_settings(project)["enabled"],
     }
 
 
@@ -292,6 +294,14 @@ def approve(project_id: str, run_id: str, request: ZoomApproveRequest):
         return {
             "approval": approval,
             "next": {"kind": "broll", "input_key": key, "message": message, "planning": planning},
+        }
+    if music.read_settings(project)["enabled"]:
+        return {
+            "approval": approval,
+            "next": {
+                "kind": "music",
+                "message": "Approved. Next step: background music. Choose a track there, or continue without music, to export.",
+            },
         }
     if approval["captions"] is None:
         return {

@@ -14,8 +14,8 @@
 
 import { AbsoluteFill, Img, Sequence, useVideoConfig } from 'remotion'
 import { Video } from '@remotion/media'
-import { pipBox, placementFrameRange, sourceStartFrame } from './layout'
-import type { BrollAsset, BrollPlacement, BrollProps } from './types'
+import { captionLine, pipBox, placementFrameRange, sourceStartFrame } from './layout'
+import type { BrollAsset, BrollPlacement, BrollProps, CaptionLayout } from './types'
 
 export function BrollLayer({ broll }: { broll: BrollProps }) {
   const { fps } = useVideoConfig()
@@ -32,7 +32,7 @@ export function BrollLayer({ broll }: { broll: BrollProps }) {
             premountFor={Math.round(fps)}
             name={`B-roll ${placement.template_id}`}
           >
-            <Placement placement={placement} captionBand={broll.caption_band} />
+            <Placement placement={placement} captionBand={broll.caption_band} captionLayout={broll.caption_layout ?? null} />
           </Sequence>
         )
       })}
@@ -40,7 +40,15 @@ export function BrollLayer({ broll }: { broll: BrollProps }) {
   )
 }
 
-function Placement({ placement, captionBand }: { placement: BrollPlacement; captionBand: BrollProps['caption_band'] }) {
+function Placement({
+  placement,
+  captionBand,
+  captionLayout,
+}: {
+  placement: BrollPlacement
+  captionBand: BrollProps['caption_band']
+  captionLayout: CaptionLayout | null
+}) {
   const { width, height, fps } = useVideoConfig()
 
   if (placement.template_id === 'fullframe') {
@@ -59,8 +67,9 @@ function Placement({ placement, captionBand }: { placement: BrollPlacement; capt
     )
   }
 
-  const box = pipBox(width, height, placement.asset.width, placement.asset.height, placement.settings)
-  const shorter = Math.min(width, height)
+  const caption = captionLayout ? captionLine(width, height, captionLayout) : null
+  const box = pipBox(width, height, placement.asset.width, placement.asset.height, placement.settings, caption)
+  // A plain box: no outline, shadow or rounded corners.
   return (
     <AbsoluteFill>
       <div
@@ -68,9 +77,8 @@ function Placement({ placement, captionBand }: { placement: BrollPlacement; capt
           position: 'absolute',
           ...box,
           overflow: 'hidden',
-          borderRadius: shorter * 0.02,
-          backgroundColor: 'black',
-          boxShadow: `0 0 0 ${Math.max(1, shorter * 0.003)}px rgba(255,255,255,0.85), 0 ${shorter * 0.01}px ${shorter * 0.03}px rgba(0,0,0,0.45)`,
+          transform: placement.settings.rotation_degrees ? `rotate(${placement.settings.rotation_degrees}deg)` : undefined,
+          transformOrigin: 'center',
         }}
       >
         <AssetMedia

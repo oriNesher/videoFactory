@@ -1,7 +1,7 @@
 // B-roll timing and geometry (stage 3A). Run with: npm.cmd test
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { PIP_MAX_HEIGHT_FRACTION, pipBox, placementFrameRange, sourceStartFrame } from '../src/broll/layout.ts'
+import { captionLine, PIP_MAX_HEIGHT_FRACTION, pipBox, placementFrameRange, sourceStartFrame } from '../src/broll/layout.ts'
 
 test('a placement covers the frames whose start time is inside it, like a caption', () => {
   // 25 fps: 1.0 s is frame 25, 2.6 s is frame 65.
@@ -78,4 +78,37 @@ test('the library page lists undescribed assets and searches the user’s own wo
   assert.deepEqual(ids({ query: 'dashboard' }), ['c'])
   assert.deepEqual(ids({ mediaType: 'video' }), ['a', 'c'])
   assert.deepEqual(ids({ status: 'attention' }), ['c'])
+})
+
+test('a custom position centres the box at x/y and keeps it inside the frame', () => {
+  const settings = { size_percent: 40, margin_percent: 4, x_percent: 50, y_percent: 50 }
+  const box = pipBox(1080, 1920, 1920, 1080, { position: 'custom', ...settings })
+  assert.equal(box.width, 432)
+  assert.equal(box.left + box.width / 2, 540)
+  assert.ok(Math.abs(box.top + box.height / 2 - 960) <= 1)
+  const corner = pipBox(1080, 1920, 1920, 1080, { position: 'custom', ...settings, x_percent: 100, y_percent: 0 })
+  assert.equal(corner.left, 1080 - corner.width)
+  assert.equal(corner.top, 0)
+})
+
+test('the 45 % height limit holds up to size 60 and grows above it', () => {
+  const portrait = (size: number) =>
+    pipBox(1080, 1920, 924, 2048, { position: 'top_right', size_percent: size, margin_percent: 4 })
+  assert.equal(portrait(40).height, Math.round(1920 * 0.45))
+  assert.equal(portrait(60).height, Math.round(1920 * 0.45))
+  assert.equal(portrait(90).height, Math.round(1920 * 0.45 * 1.5))
+})
+
+test('above_captions centres the box with its bottom just above the caption line', () => {
+  // 1080×1920, captions at 80 % inside a 6 % safe margin, font 5 % of the shorter side.
+  const line = captionLine(1080, 1920, { position_percent: 80, safe_margin_percent: 6, font_size_percent: 5 })
+  const box = pipBox(1080, 1920, 1920, 1080, { position: 'above_captions', size_percent: 70, margin_percent: 4 }, line)
+  assert.equal(box.width, 756)
+  assert.equal(box.left, Math.round((1080 - 756) / 2))
+  assert.ok(box.top + box.height < line.top, 'the box ends above the caption line')
+  assert.ok(line.top - (box.top + box.height) < 40, 'and close to it')
+  // Captions at the top: the box goes just below them.
+  const high = captionLine(1080, 1920, { position_percent: 10, safe_margin_percent: 6, font_size_percent: 5 })
+  const below = pipBox(1080, 1920, 1920, 1080, { position: 'above_captions', size_percent: 70, margin_percent: 4 }, high)
+  assert.ok(below.top > high.bottom)
 })

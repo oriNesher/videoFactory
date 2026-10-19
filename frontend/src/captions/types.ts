@@ -9,6 +9,7 @@
  */
 
 import type { BrollProps } from '../broll/types'
+import type { MusicProps } from '../music/types'
 
 export type CaptionWord = {
   text: string
@@ -75,6 +76,8 @@ export type CaptionedVideoProps = {
   direction: 'rtl' | 'ltr'
   /** Stage 3A: B-roll between the video and the captions. Absent = none. */
   broll?: BrollProps | null
+  /** Stage 4: background music under the speaker. Absent = none. */
+  music?: MusicProps | null
 }
 
 export const COMPOSITION_ID = 'CaptionedVideo'

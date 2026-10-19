@@ -10,7 +10,7 @@ import urllib.parse
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from . import caption_inputs, caption_jobs, captions, jobs, storage, whisper_service
+from . import caption_inputs, caption_jobs, captions, jobs, player, storage, whisper_service
 from .models import (
     CaptionExportRequest,
     CaptionImportRequest,
@@ -158,6 +158,14 @@ def stream_input(project_id: str, input_key: str):
     """The video itself, for the preview, with Range support. Key, not path."""
     path = _call(caption_inputs.resolve_stream_path, project_id, input_key)
     return FileResponse(path, media_type="video/mp4", headers={"Accept-Ranges": "bytes", "Cache-Control": "no-cache"})
+
+
+@router.post("/inputs/{input_key}/open")
+def open_input(project_id: str, input_key: str):
+    """Open the video behind a key in VLC on this machine. Key, not path."""
+    path = _call(caption_inputs.resolve_stream_path, project_id, input_key)
+    _call(player.open_file, str(path))
+    return {"opened": True}
 
 
 @router.post("/transcriptions", status_code=201)

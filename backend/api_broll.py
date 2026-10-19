@@ -25,6 +25,7 @@ from . import (
     caption_jobs,
     cutting,
     jobs,
+    music,
     storage,
 )
 from .models import (
@@ -218,10 +219,20 @@ def _job_summary(record: dict | None) -> dict | None:
     )}
 
 
+MUSIC_NEXT = "Next step: background music. Choose a track there, or continue without music, to export."
+
+
+def _music_enabled(project_id: str) -> bool:
+    return music.read_settings(storage.read_project(project_id))["enabled"]
+
+
 def _continuation(project_id: str, key: str, decision: dict | None) -> dict | None:
-    """What followed the latest valid decision: an export, or the base as final."""
+    """What followed the latest valid decision: the music stage, an export, or the base as final."""
     if decision is None:
         return None
+    if _music_enabled(project_id):
+        # The music stage (stage 4) exports the finished video.
+        return {"kind": "music", "message": MUSIC_NEXT}
     # An approved plan with no placements continues exactly like a skip: the
     # unchanged picture goes on to the captions export (or is final).
     if decision["decision"] == broll.DECISION_APPROVED and decision.get("placement_count"):
@@ -401,15 +412,19 @@ def validate_plan(project_id: str, input_key: str, request: BrollPlanRequest):
 
 @router.post("/inputs/{input_key}/approve")
 def approve(project_id: str, input_key: str, request: BrollDecisionRequest):
-    """Approve exactly the reviewed composition, then export it.
+    """Approve exactly the reviewed composition, then continue.
 
-    A reviewed plan with no placements is approved as "no B-roll" and
-    continues like a skip, to the existing captions export.
+    With the music stage on (the default) that is the music stage, which
+    exports. Otherwise it is exported here; a reviewed plan with no
+    placements is approved as "no B-roll" and continues like a skip, to the
+    existing captions export.
     """
     _call(storage.read_project, project_id)
     decision, _composed = _call(
         broll.decide, project_id, input_key, decision=broll.DECISION_APPROVED, composition_digest=request.composition_digest
     )
+    if _music_enabled(project_id):
+        return {"decision": decision, "next": {"kind": "music", "message": MUSIC_NEXT}}
     if not decision["placement_count"]:
         return _continue_without_broll(project_id, input_key, decision)
     existing = _continuation(project_id, input_key, decision)
@@ -429,11 +444,13 @@ def approve(project_id: str, input_key: str, request: BrollDecisionRequest):
 
 @router.post("/inputs/{input_key}/skip")
 def skip(project_id: str, input_key: str, request: BrollDecisionRequest):
-    """No B-roll for this video: continue to the existing export flow."""
+    """No B-roll for this video: continue to the music stage, or the existing export flow."""
     _call(storage.read_project, project_id)
     decision, _composed = _call(
         broll.decide, project_id, input_key, decision=broll.DECISION_SKIPPED, composition_digest=request.composition_digest
     )
+    if _music_enabled(project_id):
+        return {"decision": decision, "next": {"kind": "music", "message": MUSIC_NEXT}}
     return _continue_without_broll(project_id, input_key, decision)
 
 

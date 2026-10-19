@@ -1,5 +1,6 @@
 import type {
   AddDirectoryResult,
+  AudioTrack,
   BrollDecision,
   BrollInputState,
   BrollLibraryAsset,
@@ -27,6 +28,10 @@ import type {
   Job,
   JobListing,
   LlmStatus,
+  MusicDecision,
+  MusicNext,
+  MusicSettings,
+  MusicState,
   PipelineState,
   PlanListing,
   PlanRevision,
@@ -462,6 +467,13 @@ export function captionInputStreamUrl(projectId: string, inputKey: string) {
   return `${API_BASE}${captionsBase(projectId)}/inputs/${inputKey}/stream`
 }
 
+/** Open the video behind an input key (cut, zoomed, footage…) in VLC. */
+export function openInputInVlc(projectId: string, inputKey: string) {
+  return request<{ opened: boolean }>(`${captionsBase(projectId)}/inputs/${inputKey}/open`, {
+    method: 'POST',
+  })
+}
+
 /** Returns either a reused transcript or the queued job. */
 export function startTranscription(
   projectId: string,
@@ -777,6 +789,75 @@ export function brollExportUrl(projectId: string, exportId: string, download = f
 
 export function brollBaseVideoUrl(projectId: string, inputKey: string, download = false) {
   return `${API_BASE}${brollBase(projectId)}/inputs/${inputKey}/video${download ? '?download=true' : ''}`
+}
+
+// --- background music (stage 4) -------------------------------------------------------
+
+export function getMusicLibrary() {
+  return request<{ assets: AudioTrack[]; storage_note: string; rights_note: string }>('/audio/library?kind=music')
+}
+
+/** No path opens the machine's file dialog on the backend. */
+export function importMusicTrack(path: string | null) {
+  return request<{ cancelled: boolean; asset: AudioTrack | null; duplicate: boolean }>('/audio/library/imports', {
+    method: 'POST',
+    body: JSON.stringify({ path, kind: 'music' }),
+  })
+}
+
+export function renameMusicTrack(trackId: string, displayName: string | null) {
+  return request<AudioTrack>(`/audio/library/${trackId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ display_name: displayName }),
+  })
+}
+
+export function remeasureMusicTrack(trackId: string) {
+  return request<AudioTrack>(`/audio/library/${trackId}/remeasure`, { method: 'POST' })
+}
+
+/** Removes the library entry only; the file on disk is never touched. */
+export function removeMusicTrack(trackId: string) {
+  return request<{ removed: string }>(`/audio/library/${trackId}`, { method: 'DELETE' })
+}
+
+/** The digest busts the browser cache when the file is re-measured. */
+export function musicTrackMediaUrl(trackId: string, digest: string) {
+  return `${API_BASE}/audio/library/${trackId}/media?v=${digest.slice(7, 19)}`
+}
+
+const musicBase = (projectId: string) => `/projects/${projectId}/music`
+
+export function getMusicState(projectId: string) {
+  return request<MusicState>(musicBase(projectId))
+}
+
+export function saveMusicSettings(projectId: string, changes: Partial<MusicSettings>) {
+  return request<MusicSettings>(`${musicBase(projectId)}/settings`, {
+    method: 'PUT',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function decideMusic(projectId: string, decision: 'approve' | 'skip', compositionDigest: string) {
+  return request<{ decision: MusicDecision; next: MusicNext }>(`${musicBase(projectId)}/${decision}`, {
+    method: 'POST',
+    body: JSON.stringify({ composition_digest: compositionDigest }),
+  })
+}
+
+/** Play the finished video in VLC on this machine. */
+export function openFinalExportInVlc(projectId: string, exportId: string) {
+  return request<{ opened: boolean }>(`${musicBase(projectId)}/exports/${exportId}/open`, { method: 'POST' })
+}
+
+/** Show the finished video, selected, in File Explorer on this machine. */
+export function revealFinalExport(projectId: string, exportId: string) {
+  return request<{ opened: boolean }>(`${musicBase(projectId)}/exports/${exportId}/reveal`, { method: 'POST' })
+}
+
+export function finalExportUrl(projectId: string, exportId: string, download = false) {
+  return `${API_BASE}${musicBase(projectId)}/exports/${exportId}/file${download ? '?download=true' : ''}`
 }
 
 // --- the stage pipeline ----------------------------------------------------------------

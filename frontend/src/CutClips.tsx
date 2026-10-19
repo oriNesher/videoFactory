@@ -11,8 +11,8 @@ import type {
 
 /**
  * The boundary-only clip list: for every selected clip, where it will be cut,
- * the means to move that by hand, and previews of the three places a cut can
- * be wrong — the opening, the ending and the join to the next clip.
+ * the means to move that by hand, and previews of the two places a cut can
+ * be wrong — the opening and the ending.
  *
  * Everything shown here comes from the backend's state for the form as it
  * stands. The component decides nothing about staleness or boundaries itself.
@@ -241,7 +241,6 @@ function BoundaryInput({
 function ClipRow({
   projectId,
   clip,
-  next,
   samples,
   pending,
   disabled,
@@ -251,7 +250,6 @@ function ClipRow({
 }: {
   projectId: string
   clip: CutStateClip
-  next: CutStateClip | undefined
   samples: Map<string, CutSample>
   pending: Map<string, PendingStatus>
   disabled: boolean
@@ -370,21 +368,6 @@ function ClipRow({
             disabled={disabled || clip.error !== null}
             onRender={onRender}
           />
-          {next?.available && (
-            <PreviewSlot
-              projectId={projectId}
-              kind="join"
-              sample={samples.get(slotOf('join', clip.source_id, next.source_id))}
-              pending={pending.get(slotOf('join', clip.source_id, next.source_id))}
-              request={{
-                kind: 'join',
-                source_id: clip.source_id,
-                next_source_id: next.source_id,
-              }}
-              disabled={disabled || clip.error !== null || next.error !== null}
-              onRender={onRender}
-            />
-          )}
         </div>
       )}
     </li>
@@ -419,12 +402,11 @@ export default function CutClips({
 
   return (
     <ul className="clips boundary-clips">
-      {clips.map((clip, index) => (
+      {clips.map((clip) => (
         <ClipRow
           key={clip.source_id}
           projectId={projectId}
           clip={clip}
-          next={clips[index + 1]}
           samples={bySlot}
           pending={pending}
           disabled={disabled}

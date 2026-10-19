@@ -271,7 +271,7 @@ def model_downloaded(model_id: str) -> bool:
 
 GROUPING_SPEC: dict[str, dict] = {
     "max_words": {
-        "type": "integer", "default": 5, "min": 1, "max": 15, "step": 1, "unit": "words",
+        "type": "integer", "default": 2, "min": 1, "max": 15, "step": 1, "unit": "words",
         "label": "Maximum words per caption",
         "description": "The most words on screen at once.",
     },

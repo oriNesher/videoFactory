@@ -439,6 +439,16 @@ type Props = {
   onJobSubmitted: () => void
 }
 
+/** A cutting mode's details, shown on hover of its ⓘ instead of on the card. */
+function describeMode(entry: { id: string; description: string; tool: string }, defaultMode: string) {
+  const extra =
+    entry.id === 'boundary'
+      ? 'Pauses inside each clip are kept: each clip is cut once at the start and once at the end, then the clips are joined. Detection finds the first and last sound, which is usually, but not always, the first and last word.'
+      : 'This also removes the pauses inside each clip: it changes the pacing, cannot be adjusted by hand and has no previews.'
+  const isDefault = entry.id === defaultMode ? ' (default)' : ''
+  return `${entry.description} ${extra} Tool: ${entry.tool}${isDefault}.`
+}
+
 /** What each cutting-screen job is doing, shown while it runs. */
 const ACTIVE_JOB_TITLES: Record<string, string> = {
   cut_media: 'Rendering clips and merged video…',
@@ -622,6 +632,32 @@ export default function CuttingPanel({
   }, [formKey, refreshState, refreshToken])
 
   const jobsActive = (cutState?.active_jobs.length ?? 0) > 0 || pendingJob !== null
+
+  // Boundaries are found by themselves, so the clips show what will be cut
+  // before anything is rendered. Once per detection settings and clip list:
+  // a failed or cancelled detection is not retried in a loop; the
+  // Find boundaries button is still there.
+  const autoAnalysed = useRef<string | null>(null)
+  useEffect(() => {
+    if (!form || !cutState || busy || jobsActive) return
+    if (form.mode !== 'boundary' || cutState.mode !== 'boundary' || !cutState.analysis_needed) return
+    if (cutState.clips.every((clip) => !clip.available)) return
+    const key = JSON.stringify([form.boundary_settings, form.source_ids])
+    if (autoAnalysed.current === key) return
+    autoAnalysed.current = key
+    void startCuttingAnalysis(project.id, form)
+      .then((job) => {
+        setPendingJob(job.id)
+        notify.current()
+      })
+      .catch((caught) =>
+        setNotice({
+          section: 'cut',
+          kind: 'error',
+          text: caught instanceof Error ? caught.message : 'Finding the boundaries failed.',
+        }),
+      )
+  }, [form, cutState, busy, jobsActive, project.id])
   // Which previews are on their way, so each shows it is being worked on.
   const pendingSamples = new Map<string, PendingStatus>()
   for (const job of cutState?.active_jobs ?? []) {
@@ -899,29 +935,18 @@ export default function CuttingPanel({
             />
             <span>
               <strong>{entry.label}</strong>
-              {entry.id === catalog.default_mode && <span className="badge">Default</span>}
-              <span className="hint small">{entry.description}</span>
-              <span className="hint small mono">{entry.tool}</span>
+              <span
+                className="info"
+                tabIndex={0}
+                aria-label={describeMode(entry, catalog.default_mode)}
+                data-tip={describeMode(entry, catalog.default_mode)}
+              >
+                i
+              </span>
             </span>
           </label>
         ))}
       </fieldset>
-
-      {boundaryMode ? (
-        <p className="message">
-          <strong>Pauses inside each clip are kept.</strong> Each clip is cut once at
-          the start and once at the end, separately from the others, and then the
-          clips are joined. Detection measures loudness: it finds the first and
-          last <em>sound</em>, which is usually — not always — your first and last
-          word.
-        </p>
-      ) : (
-        <p className="message warn">
-          <strong>This mode also removes the pauses inside each clip.</strong> It
-          changes the pacing of your delivery, cannot be adjusted by hand, and has
-          no previews — the result is what you get when the render finishes.
-        </p>
-      )}
 
       {renderNotice('cut')}
 
@@ -1055,8 +1080,17 @@ export default function CuttingPanel({
               <button
                 type="button"
                 disabled={blocked || jobsActive || cutState.invalid_count > 0}
-                title="Opening, ending and join previews for every clip"
-                onClick={() => renderSamples()}
+                title="Opening and ending previews for every clip"
+                onClick={() =>
+                  renderSamples(
+                    cutState.clips
+                      .filter((clip) => clip.available && clip.error === null)
+                      .flatMap((clip) => [
+                        { kind: 'opening' as const, source_id: clip.source_id },
+                        { kind: 'ending' as const, source_id: clip.source_id },
+                      ]),
+                  )
+                }
               >
                 Render all previews
               </button>

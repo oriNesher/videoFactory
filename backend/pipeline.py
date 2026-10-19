@@ -1,7 +1,7 @@
 """The project's stages as one pipeline: what is accepted, and what the video is now.
 
-The editor shows five stages in order — footage, cutting, captions, zooms,
-B-roll — and a stage counts as done only when the user accepted it:
+The editor shows six stages in order — footage, cutting, captions, zooms,
+B-roll, music — and a stage counts as done only when the user accepted it:
 
     footage    the saved clip list, accepted here
     cutting    one cut run's merged video, accepted here
@@ -9,6 +9,8 @@ B-roll — and a stage counts as done only when the user accepted it:
     zooms      an approved zoom run of that video (`zooms.approve`)
     broll      an approved or skipped B-roll decision on that zoomed video
                (`broll.decide`), or B-roll switched off
+    music      an approved or skipped music decision on that result
+               (`music.decide`), or the music stage switched off
 
 The first three acceptances live in `project.settings["pipeline"]`. Each one
 names exactly what was accepted (ids, a fingerprint, revision numbers), so it
@@ -18,7 +20,9 @@ done.
 
 The preview is the furthest video reached — the zoomed video, else the
 accepted (or newest) merged cut, else the first clip — composed exactly like
-the B-roll review: current captions and B-roll drawn live over it.
+the B-roll review: current captions and B-roll drawn live over it. Once
+B-roll is decided, it is the music stage's composition: the decided B-roll
+and the chosen music, as the final export will render it.
 
 Reading never renders, transcribes or calls a provider, so polling is free.
 """
@@ -29,7 +33,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from . import broll, caption_inputs, cutting, storage, zooms
+from . import audio_library, broll, caption_inputs, cutting, music, storage, zooms
 
 SETTINGS_KEY = "pipeline"
 
@@ -38,8 +42,9 @@ STAGE_CUTTING = "cutting"
 STAGE_CAPTIONS = "captions"
 STAGE_ZOOMS = "zooms"
 STAGE_BROLL = "broll"
+STAGE_MUSIC = "music"
 
-STAGES = (STAGE_FOOTAGE, STAGE_CUTTING, STAGE_CAPTIONS, STAGE_ZOOMS, STAGE_BROLL)
+STAGES = (STAGE_FOOTAGE, STAGE_CUTTING, STAGE_CAPTIONS, STAGE_ZOOMS, STAGE_BROLL, STAGE_MUSIC)
 ACCEPTED_HERE = (STAGE_FOOTAGE, STAGE_CUTTING, STAGE_CAPTIONS)
 
 LABELS = {
@@ -48,6 +53,7 @@ LABELS = {
     STAGE_CAPTIONS: "Captions",
     STAGE_ZOOMS: "Zooms",
     STAGE_BROLL: "B-roll",
+    STAGE_MUSIC: "Music",
 }
 
 
@@ -277,6 +283,26 @@ def _broll(project_id: str, project: dict, zoom_key: str | None, zooms_done: boo
     return _stage(STAGE_BROLL, done=review["approved"] or review["skipped"], summary=summary)
 
 
+def _music(project_id: str, project: dict, key: str | None, broll_done: bool) -> dict:
+    if not music.read_settings(project)["enabled"]:
+        return _stage(STAGE_MUSIC, done=broll_done, summary="Background music is switched off")
+    if key is None or not broll_done:
+        return _stage(STAGE_MUSIC, summary="Waiting for B-roll")
+    try:
+        composed = music.compose(project_id, key)
+    except storage.ProjectError as error:
+        return _stage(STAGE_MUSIC, summary=error.message)
+    review = music.review_state(project_id, composed)
+    if review["approved"]:
+        entry = audio_library.find_entry(composed["settings"]["track_id"])
+        summary = "Approved: %s" % (audio_library.public_entry(entry)["display_name"] if entry else "music")
+    elif review["skipped"]:
+        summary = "Without music"
+    else:
+        summary = review["outdated_reason"] or "Not reviewed yet"
+    return _stage(STAGE_MUSIC, done=review["approved"] or review["skipped"], summary=summary)
+
+
 # --- the whole picture ------------------------------------------------------------
 
 
@@ -284,7 +310,13 @@ def _preview(project_id: str, project: dict, stage_id: str, key: str | None) -> 
     if key is None:
         return None
     try:
-        composed = broll.compose(project_id, key)
+        if stage_id == STAGE_MUSIC:
+            with_music = music.compose(project_id, key)
+            composed, props, digest = with_music["broll"], with_music["props"], with_music["digest"]
+            track = with_music["track_reference"] if props["music"] else None
+        else:
+            composed = broll.compose(project_id, key)
+            props, digest, track = composed["props"], composed["digest"], None
     except storage.ProjectError as error:
         return {"stage": stage_id, "key": key, "label": None, "props": None, "digest": None, "error": error.message}
     return {
@@ -292,9 +324,11 @@ def _preview(project_id: str, project: dict, stage_id: str, key: str | None) -> 
         "key": key,
         "label": composed["base"]["label"],
         # Without media URLs, exactly like the B-roll review: the browser adds them.
-        "props": composed["props"],
-        "digest": composed["digest"],
+        "props": props,
+        "digest": digest,
         "assets": {asset_id: {"digest": entry["fingerprint"]["digest"]} for asset_id, entry in composed["assets"].items()},
+        # The music track's id and digest, for the browser's media URL.
+        "music": track,
         "error": None,
     }
 
@@ -309,8 +343,9 @@ def state(project_id: str) -> dict:
     caption_stage = _captions(project_id, cut_key, accepted.get(STAGE_CAPTIONS))
     zoom_stage, zoom_key = _zooms(project_id, _zoom_runs_for(project_id, cut_key))
     broll_stage = _broll(project_id, project, zoom_key if zoom_stage["done"] else None, zoom_stage["done"])
+    music_stage = _music(project_id, project, zoom_key if zoom_stage["done"] else None, broll_stage["done"])
 
-    stages = [footage, cut, caption_stage, zoom_stage, broll_stage]
+    stages = [footage, cut, caption_stage, zoom_stage, broll_stage, music_stage]
     # A stage is done only on top of a done stage: a change upstream reopens
     # everything after it without touching what was recorded there.
     for previous, current in zip(stages, stages[1:]):
@@ -322,7 +357,10 @@ def state(project_id: str) -> dict:
     # The furthest video reached, accepted or not.
     first_source = next((source for source in project["sources"] if os.path.isfile(source["path"])), None)
     if zoom_key is not None:
-        preview_stage, preview_key = STAGE_BROLL if zoom_stage["done"] else STAGE_ZOOMS, zoom_key
+        preview_stage = STAGE_ZOOMS
+        if zoom_stage["done"]:
+            preview_stage = STAGE_MUSIC if broll_stage["done"] and music.read_settings(project)["enabled"] else STAGE_BROLL
+        preview_key = zoom_key
     elif cut_key is not None or cut["candidate"] is not None:
         preview_stage = STAGE_CAPTIONS if cut_key is not None else STAGE_CUTTING
         preview_key = cut_key or cut["candidate"]["key"]

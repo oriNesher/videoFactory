@@ -998,6 +998,8 @@ export type ZoomStatus = {
   settings: { preference: string; selected_input: string | null }
   /** Approving continues to the B-roll step instead of exporting. */
   broll_enabled: boolean
+  /** With B-roll off: approving continues to the music stage instead of exporting. */
+  music_enabled: boolean
   inputs: ZoomInputListing[]
   selected_input: string | null
 }
@@ -1102,6 +1104,7 @@ export type ZoomApproveResult = {
     | { kind: 'blocked'; message: string }
     | { kind: 'caption_export'; export: unknown; job: Job | null }
     | { kind: 'broll'; input_key: string; message: string; planning?: { status: string; job_id: string | null; message: string } }
+    | { kind: 'music'; message: string }
 }
 
 // --- B-roll (stage 3A) ---------------------------------------------------------
@@ -1283,6 +1286,8 @@ export type BrollNext =
   | { kind: 'caption_export'; export: CaptionExport | null; job: ZoomJobSummary | null }
   | { kind: 'final'; message: string }
   | { kind: 'blocked'; message: string }
+  /** The music stage is on: it exports the finished video. */
+  | { kind: 'music'; message: string }
 
 export type BrollComposedProps = Omit<import('./captions/types').CaptionedVideoProps, 'video'> & {
   video: Omit<import('./captions/types').CompositionVideo, 'src'>
@@ -1317,7 +1322,7 @@ export type BrollInputState = {
 
 // --- the stage pipeline (editor shell) ---------------------------------------------
 
-export type StageId = 'footage' | 'cutting' | 'captions' | 'zooms' | 'broll'
+export type StageId = 'footage' | 'cutting' | 'captions' | 'zooms' | 'broll' | 'music'
 
 export type PipelineStage = {
   id: StageId
@@ -1341,6 +1346,8 @@ export type PipelinePreview = {
   props: BrollComposedProps | null
   digest: string | null
   assets?: Record<string, { digest: string }>
+  /** The music track in the props, for its media URL (music stage only). */
+  music?: { id: string; digest: string } | null
   error: string | null
 }
 
@@ -1350,4 +1357,70 @@ export type PipelineState = {
   current_stage: StageId | null
   stages_left: number
   preview: PipelinePreview | null
+}
+
+// --- background music (stage 4) ---------------------------------------------------------
+
+export type AudioTrackStatus = 'available' | 'missing' | 'changed'
+
+export type AudioTrack = {
+  id: string
+  kind: 'music'
+  filename: string
+  display_name: string
+  measured: { duration_seconds: number; codec: string | null; sample_rate: number | null; channels: number | null }
+  fingerprint: { digest: string }
+  imported_at: string
+  storage: 'referenced'
+  status: AudioTrackStatus
+  status_reason: string | null
+}
+
+export type MusicSettings = {
+  enabled: boolean
+  track_id: string | null
+  volume_percent: number
+  start_seconds: number
+  fade_in_seconds: number
+  fade_out_seconds: number
+  loop: boolean
+}
+
+export type MusicDecision = {
+  decision: 'approved' | 'skipped'
+  decided_at: string
+  composition_digest: string
+  has_overlays: boolean
+}
+
+export type MusicNext =
+  | { kind: 'final_export'; export: (BrollExportRecord & { music: { id: string } | null }) | null; job: ZoomJobSummary | null }
+  | { kind: 'final'; message: string }
+  | { kind: 'blocked'; message: string }
+
+export type MusicState = {
+  settings: MusicSettings
+  input_key: string | null
+  input: CaptionInputDetail | null
+  available: boolean
+  unavailable_reason: string | null
+  /** What the music goes on: the B-roll stage's outcome. */
+  broll_state: 'approved' | 'skipped' | 'off' | 'pending' | null
+  track: AudioTrack | null
+  issues: string[]
+  /** The composition's props without media URLs: exactly what the export renders. */
+  props: BrollComposedProps | null
+  composition_digest: string | null
+  review: {
+    decision: MusicDecision | null
+    approved: boolean
+    skipped: boolean
+    outdated_reason: string | null
+    blocked_reason: string | null
+    can_approve: boolean
+    can_skip: boolean
+  } | null
+  continuation: MusicNext | null
+  renderer: { ready: boolean; problems: string[] }
+  rights_note: string
 }

@@ -1,15 +1,12 @@
-import type { PlayerRef } from '@remotion/player'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   cancelJob,
   captionExportUrl,
-  captionInputStreamUrl,
-  captionOperation,
   downloadWhisperModel,
   getCaptionCatalog,
   getCaptionInput,
   getCaptionRevision,
-  importCaptionVideo,
+  getPipeline,
   listCaptionInputs,
   prepareCaptionRenderer,
   regroupCaptions,
@@ -20,12 +17,12 @@ import {
   startTranscription,
   validateCaptions,
 } from './api'
-import CaptionEditor from './CaptionEditor'
-import { formatTime } from './captionFormat'
-import CaptionPreview from './CaptionPreview'
+import { toPreviewCaptions } from './captionFormat'
 import CaptionStyleForm from './CaptionStyleForm'
+import CaptionTextTable from './CaptionTextTable'
 import type { CaptionStyle } from './captions/types'
-import { activeIndex, captionFrameRanges, secondsToFrame } from './captions/timing'
+import { activeIndex, captionFrameRanges } from './captions/timing'
+import { usePreviewBridge } from './previewBridge'
 import type {
   CaptionCatalog,
   CaptionCheck,
@@ -97,7 +94,10 @@ export default function CaptionsPanel({
   const [savedStyle, setSavedStyle] = useState<CaptionStyle | null>(null)
   const [frame, setFrame] = useState(0)
 
-  const playerRef = useRef<PlayerRef>(null)
+  // The shared preview beside the slide plays the video; this slide feeds it
+  // the unsaved draft and follows its position.
+  const bridge = usePreviewBridge()
+  useEffect(() => bridge.subscribeFrame((value) => setFrame(value)), [bridge])
   const activeJobIds = useRef<string>('')
 
   const dirty = revision !== null && !sameJson(draft, revision.captions)
@@ -124,18 +124,39 @@ export default function CaptionsPanel({
         setStyle(loadedInputs.style)
         setSavedStyle(loadedInputs.style)
         setGrouping(loadedInputs.grouping)
-        const keys = loadedInputs.inputs.map((input) => input.key)
-        setSelectedKey(
-          loadedInputs.selected && keys.includes(loadedInputs.selected)
-            ? loadedInputs.selected
-            : (keys[0] ?? null),
-        )
       })
       .catch((caught) => setMessage({ kind: 'error', text: errorText(caught, 'Loading captions failed.') }))
     return () => {
       cancelled = true
     }
   }, [loadInputs])
+
+  // The video is always the accepted cut's merged video: captions are a stage
+  // of the factory, not a tool pointed at any file. It follows the pipeline,
+  // so re-accepting a different cut moves the captions to it.
+  const loadCutKey = useCallback(async () => {
+    try {
+      const pipeline = await getPipeline(projectId)
+      const cutting = pipeline.stages.find((stage) => stage.id === 'cutting')
+      const key = cutting?.done && typeof cutting.acceptance?.key === 'string' ? cutting.acceptance.key : null
+      setSelectedKey((current) => (current === key ? current : key))
+    } catch (caught) {
+      setMessage({ kind: 'error', text: errorText(caught, 'Loading the accepted cut failed.') })
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    void loadCutKey()
+    const interval = window.setInterval(() => void loadCutKey(), 8000)
+    return () => window.clearInterval(interval)
+  }, [loadCutKey])
+
+  // Keep the backend's "selected video" in step, for anything that reads it.
+  useEffect(() => {
+    if (selectedKey && inputs && inputs.selected !== selectedKey) {
+      void selectCaptionInput(projectId, selectedKey).catch(() => undefined)
+    }
+  }, [projectId, selectedKey, inputs])
 
   const refreshState = useCallback(async () => {
     if (!selectedKey) return
@@ -246,10 +267,6 @@ export default function CaptionsPanel({
   const readOnly = stale || viewingOld
   const direction = RTL_LANGUAGES.has(revision?.language ?? settings?.language ?? 'he') ? 'rtl' : 'ltr'
   const errors = check?.errors ?? []
-  const timing = useMemo(
-    () => Object.fromEntries((check?.captions ?? []).map((caption) => [caption.id, caption])),
-    [check],
-  )
   const fps = composition?.fps ?? 30
   const activeId = useMemo(() => {
     const ordered = draft.filter((c) => Number.isFinite(c.start) && Number.isFinite(c.end))
@@ -258,7 +275,6 @@ export default function CaptionsPanel({
   }, [draft, fps, frame])
 
   const model = catalog?.models.find((entry) => entry.id === settings?.model) ?? null
-  const cuda = catalog?.devices.find((device) => device.id === 'cuda')
   const activeJobs = state?.active_jobs ?? []
   const transcribing = activeJobs.some((job) => job.type === 'caption_transcription')
   const downloading = activeJobs.some((job) => job.type === 'caption_model_download')
@@ -296,29 +312,6 @@ export default function CaptionsPanel({
 
   function confirmLeaveDraft(): boolean {
     return !dirty || window.confirm('Your caption edits are not saved. Discard them?')
-  }
-
-  async function chooseInput(key: string) {
-    if (key === selectedKey || !confirmLeaveDraft()) return
-    await run(async () => {
-      await selectCaptionInput(projectId, key)
-      setSelectedKey(key)
-    }, 'Selecting the video failed.')
-  }
-
-  async function importVideo() {
-    if (!confirmLeaveDraft()) return
-    await run(async () => {
-      const result = await importCaptionVideo(projectId)
-      if (result.cancelled || !result.input_key) return
-      await loadInputs()
-      await selectCaptionInput(projectId, result.input_key)
-      setSelectedKey(result.input_key)
-      setMessage({
-        kind: 'ok',
-        text: result.duplicate ? 'That video was already imported; it is selected.' : 'Video imported for captions.',
-      })
-    }, 'Importing the video failed.')
   }
 
   async function transcribe(force: boolean) {
@@ -362,18 +355,6 @@ export default function CaptionsPanel({
       await cancelJob(projectId, jobId)
       await refreshState()
     }, 'Cancelling failed.')
-  }
-
-  async function operate(
-    operation: 'split' | 'merge' | 'fix_overlaps',
-    options: { captionId?: string; wordIndex?: number; atSeconds?: number } = {},
-  ) {
-    if (!transcriptId) return
-    await run(async () => {
-      const result = await captionOperation(projectId, transcriptId, draft, operation, options)
-      setDraft(result.captions)
-      setCheck(result)
-    }, 'The caption change failed.')
   }
 
   async function save() {
@@ -451,16 +432,32 @@ export default function CaptionsPanel({
     }, 'Starting the export failed.')
   }
 
-  const seek = useCallback(
-    (seconds: number) => {
-      const player = playerRef.current
-      if (!player || !Number.isFinite(seconds)) return
-      player.seekTo(secondsToFrame(seconds, fps))
-    },
-    [fps],
-  )
+  const seek = useCallback((seconds: number) => bridge.seek(seconds), [bridge])
 
-  const onFrame = useCallback((value: number) => setFrame(value), [])
+  // Show the draft (text fixes, style changes) on the preview as it is typed.
+  const previewCaptions = useMemo(() => toPreviewCaptions(draft), [draft])
+  useEffect(() => {
+    if (!selectedKey || !revision || !style || stale) {
+      bridge.setOverride(null)
+      return
+    }
+    bridge.setOverride({ key: selectedKey, captions: previewCaptions, style, direction })
+  }, [bridge, selectedKey, revision, style, stale, previewCaptions, direction])
+  useEffect(() => () => bridge.setOverride(null), [bridge])
+
+  // Transcribe by itself as soon as the accepted cut has no transcript, with
+  // the default engine settings. Once per video: a failed or cancelled run
+  // is not restarted in a loop (the Transcribe button is the retry).
+  const autoTranscribed = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedKey || !state || state.input.key !== selectedKey || busy) return
+    if (state.transcripts.length > 0 || state.active_jobs.length > 0) return
+    if (!model?.downloaded || !state.input.metadata?.has_audio) return
+    if (autoTranscribed.current === selectedKey) return
+    autoTranscribed.current = selectedKey
+    void transcribe(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, state, busy, model])
 
   // --- render ----------------------------------------------------------------
 
@@ -473,68 +470,55 @@ export default function CaptionsPanel({
     )
   }
 
-  const streamUrl =
-    selectedKey && detail?.fingerprint
-      ? `${captionInputStreamUrl(projectId, selectedKey)}?v=${detail.fingerprint.digest.slice(7, 19)}`
-      : null
+  const canTranscribe = selectedKey !== null && !transcribing && (!transcript || stale)
+  const editing = transcript !== null && revision !== null && composition !== null
 
   return (
     <section className="panel subpanel captions">
-      <div className="editor-header">
-        <h3>Captions</h3>
-        <span className="small">Whisper runs on this computer. Nothing here needs an AI key.</span>
+      {/* Actions first, always at the top. */}
+      <div className="row caption-actions">
+        {canTranscribe && (
+          <button
+            type="button"
+            className="primary"
+            disabled={busy || !model?.downloaded || !detail?.metadata?.has_audio}
+            onClick={() => void transcribe(stale)}
+          >
+            {stale ? 'Transcribe again' : 'Transcribe'}
+          </button>
+        )}
+        {editing && (
+          <>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy || readOnly || !dirty || errors.length > 0}
+              onClick={() => void save()}
+            >
+              Save text fixes
+            </button>
+            <button
+              type="button"
+              disabled={busy || !dirty}
+              onClick={() => {
+                if (window.confirm('Discard your unsaved text fixes?')) setDraft(revision.captions)
+              }}
+            >
+              Discard
+            </button>
+            {dirty && <span className="badge warn">Unsaved</span>}
+            {errors.length > 0 && <span className="badge bad">{errors.length} to fix</span>}
+          </>
+        )}
       </div>
 
       {message && <p className={`message ${message.kind}`}>{message.text}</p>}
 
-      {/* 1. Select a video */}
-      <h4>1. Video</h4>
-      <div className="row">
-        <select
-          value={selectedKey ?? ''}
-          onChange={(event) => void chooseInput(event.target.value)}
-          disabled={busy || inputs.inputs.length === 0}
-          aria-label="Video to caption"
-        >
-          {inputs.inputs.length === 0 && <option value="">No videos yet</option>}
-          {(['cut', 'source', 'import', 'zoom'] as const).map((kind) => {
-            const group = inputs.inputs.filter((input) => input.kind === kind)
-            if (group.length === 0) return null
-            return (
-              <optgroup key={kind} label={group[0].kind_label}>
-                {group.map((input) => (
-                  <option key={input.key} value={input.key}>
-                    {input.label}
-                    {input.available ? '' : ' (missing)'}
-                  </option>
-                ))}
-              </optgroup>
-            )
-          })}
-        </select>
-        <button type="button" onClick={() => void importVideo()} disabled={busy}>
-          Import a video…
-        </button>
-      </div>
-      <p className="hint">
-        Captions use the selected video&apos;s own audio and timing. Switching videos keeps every earlier transcript
-        and export.
-      </p>
+      {!selectedKey && <p className="hint">Accept the cut first: captions are made on its merged video.</p>}
 
-      {state?.timing_source?.via_zoom && (
-        <p className="message ok">
-          A zoomed video keeps every frame at its original time, so it uses the captions of the clean video it was
-          made from. They are drawn over the zoomed picture, never zoomed with it.
-        </p>
-      )}
       {detail?.error && <p className="message error">{detail.error}</p>}
-      {detail?.metadata && composition && (
-        <p className="small">
-          {composition.width}×{composition.height} · {Number(composition.fps.toFixed(3))} fps ·{' '}
-          {formatTime(detail.metadata.duration_seconds)}
-          {detail.metadata.rotation ? ` · rotated ${detail.metadata.rotation}°` : ''}
-          {!detail.metadata.has_audio && <span className="badge bad">No audio</span>}
-        </p>
+      {detail?.metadata && !detail.metadata.has_audio && (
+        <p className="message error">The merged video has no audio, so there is nothing to transcribe.</p>
       )}
       {composition?.notes.map((note) => (
         <p key={note} className="message warn">
@@ -550,71 +534,11 @@ export default function CaptionsPanel({
         </ul>
       )}
 
-      {/* 2. Transcribe */}
-      <h4>2. Transcription</h4>
-      <div className="caption-settings">
-        <label className="field">
-          <span>Model</span>
-          <select value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })}>
-            {catalog.models.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.label}
-                {entry.downloaded ? '' : ' — not downloaded'}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Language</span>
-          <select
-            value={settings.language}
-            onChange={(event) => setSettings({ ...settings, language: event.target.value })}
-          >
-            {catalog.languages.map((language) => (
-              <option key={language.code} value={language.code}>
-                {language.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Device</span>
-          <select
-            value={settings.device}
-            onChange={(event) => {
-              const device = event.target.value as 'cpu' | 'cuda'
-              setSettings({ ...settings, device, compute_type: catalog.compute_types[device][0] })
-            }}
-          >
-            {catalog.devices.map((device) => (
-              <option key={device.id} value={device.id} disabled={!device.available}>
-                {device.label}
-                {device.available ? '' : ' — not available'}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Precision</span>
-          <select
-            value={settings.compute_type}
-            onChange={(event) => setSettings({ ...settings, compute_type: event.target.value })}
-          >
-            {catalog.compute_types[settings.device].map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {cuda && !cuda.available && <p className="small">GPU: {cuda.reason}</p>}
-
       {model && !model.downloaded && (
         <div className="message warn">
           <p>
-            <strong>{model.label}</strong> is not on this computer yet. Downloading it needs internet once ({model.download}
-            ) and saves it in <span className="mono">{catalog.model_cache}</span>. After that, transcription runs offline.
+            The transcription model (<strong>{model.label}</strong>) is not on this computer yet. Downloading it needs
+            internet once ({model.download}). After that, transcription runs offline.
           </p>
           <button type="button" className="primary" onClick={() => void downloadModel()} disabled={busy || downloading}>
             {downloading ? 'Downloading…' : 'Download model'}
@@ -622,161 +546,62 @@ export default function CaptionsPanel({
         </div>
       )}
 
-      <div className="row">
-        <button
-          type="button"
-          className="primary"
-          disabled={busy || transcribing || !selectedKey || !model?.downloaded || !detail?.metadata?.has_audio}
-          onClick={() => void transcribe(false)}
-        >
-          {transcribing ? 'Transcribing…' : 'Transcribe'}
-        </button>
-        {(state?.transcripts.length ?? 0) > 0 && (
-          <button
-            type="button"
-            disabled={busy || transcribing || !model?.downloaded}
-            onClick={() => void transcribe(true)}
-            title="Make a new transcript even if one with these settings exists. The current one is kept."
-          >
-            Transcribe again
-          </button>
-        )}
-        <span className="small">
-          Progress is the position of the last recognised phrase, so it moves in steps. The first run loads the model (a
-          few seconds); later runs reuse it.
-        </span>
-      </div>
-
-      {state && state.transcripts.length > 0 && (
-        <div className="row">
-          <label className="field wide">
-            <span>Transcript</span>
-            <select
-              value={transcriptId ?? ''}
-              onChange={(event) => {
-                if (confirmLeaveDraft()) setTranscriptId(event.target.value)
-              }}
-            >
-              {state.transcripts.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {new Date(entry.created_at).toLocaleString()} · {entry.model_label.split(' — ')[0]} · {entry.language}
-                  {' · '}
-                  {entry.word_count ?? 0} words{entry.stale ? ' · OUT OF DATE' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      )}
       {transcript?.stale && <p className="message error">{transcript.reason}</p>}
 
-      {/* 3–5. Review, group, style, preview */}
-      {transcript && revision && composition && streamUrl && (
+      {editing && (
         <>
-          <h4>3. Review and correct</h4>
-          <div className="caption-workspace">
-            <div className="caption-preview-column">
-              <CaptionPreview
-                ref={playerRef}
-                src={streamUrl}
-                composition={composition}
-                captions={stale ? [] : draft}
-                style={style}
-                direction={direction}
-                onFrame={onFrame}
-              />
-              <p className="small">
-                Preview of the same composition the export renders. Edits and style changes appear at once.
-              </p>
+          {viewingOld && !stale && (
+            <p className="message warn">
+              A newer revision was saved meanwhile, so this one is read-only.{' '}
+              <button type="button" onClick={() => void makeLatest()} disabled={busy}>
+                Keep these fixes as the latest
+              </button>
+            </p>
+          )}
+
+          {errors.filter((error) => !error.caption_id).map((error) => (
+            <p key={error.message} className="message error">
+              {error.message}
+            </p>
+          ))}
+
+          <CaptionTextTable
+            captions={draft}
+            errors={errors}
+            activeId={activeId}
+            direction={direction}
+            readOnly={readOnly}
+            onChange={setDraft}
+            onSeek={seek}
+          />
+          {draft.length === 0 && <p className="hint">No speech was recognised, so there are no captions.</p>}
+
+          <section className="caption-style">
+            <h4>
+              Caption style {styleDirty && <span className="badge warn">Unsaved</span>}
+            </h4>
+            <div className="row">
+              <button type="button" className="primary" disabled={busy || !styleDirty} onClick={() => void storeStyle()}>
+                Save style
+              </button>
+              <button type="button" disabled={busy || !styleDirty} onClick={() => savedStyle && setStyle(savedStyle)}>
+                Discard style changes
+              </button>
+              <button type="button" disabled={busy} onClick={() => setStyle(catalog.style_defaults)}>
+                Template defaults
+              </button>
             </div>
+            <CaptionStyleForm catalog={catalog} style={style} onChange={setStyle} />
+          </section>
 
-            <div className="caption-edit-column">
-              <div className="row">
-                <label className="field">
-                  <span>Revision</span>
-                  <select
-                    value={revision.revision}
-                    onChange={(event) => {
-                      if (confirmLeaveDraft()) void openRevision(Number(event.target.value))
-                    }}
-                  >
-                    {transcript.revisions
-                      .slice()
-                      .reverse()
-                      .map((number) => (
-                        <option key={number} value={number}>
-                          Revision {number}
-                          {number === transcriptLatest ? ' (latest)' : ''}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                {dirty && <span className="badge warn">Unsaved edits</span>}
-                {revision.has_manual_edits && !dirty && <span className="badge">Edited by hand</span>}
-                {errors.length > 0 && <span className="badge bad">{errors.length} to fix</span>}
-              </div>
-
-              {viewingOld && !stale && (
-                <p className="message warn">
-                  Revision {revision.revision} is an older revision and is read-only.{' '}
-                  <button type="button" onClick={() => void makeLatest()} disabled={busy}>
-                    Make it the latest revision
-                  </button>
-                </p>
-              )}
-
-              <div className="row">
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={busy || readOnly || !dirty || errors.length > 0}
-                  onClick={() => void save()}
-                >
-                  Save captions
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || !dirty}
-                  onClick={() => {
-                    if (window.confirm('Discard your unsaved caption edits?')) setDraft(revision.captions)
-                  }}
-                >
-                  Discard edits
-                </button>
-                {errors.some((error) => error.message.includes('Fix overlaps')) && !readOnly && (
-                  <button type="button" disabled={busy} onClick={() => void operate('fix_overlaps')}>
-                    Fix overlaps
-                  </button>
-                )}
-              </div>
-
-              {errors.filter((error) => !error.caption_id).map((error) => (
-                <p key={error.message} className="message error">
-                  {error.message}
-                </p>
-              ))}
-
-              <CaptionEditor
-                captions={draft}
-                errors={errors}
-                timing={timing}
-                activeId={activeId}
-                readOnly={readOnly}
-                busy={busy}
-                onChange={setDraft}
-                onSeek={seek}
-                onSplit={(captionId, wordIndex) =>
-                  void operate('split', { captionId, wordIndex, atSeconds: frame / fps })
-                }
-                onMerge={(captionId) => void operate('merge', { captionId })}
-              />
-              {draft.length === 0 && <p className="hint">No speech was recognised, so there are no captions.</p>}
+          <section className="caption-grouping">
+            <h4>Grouping — how many words each caption holds</h4>
+            <div className="row">
+              <button type="button" disabled={busy || stale} onClick={() => void regroup()}>
+                Regroup from the transcript
+              </button>
+              <span className="small">Creates a new revision. Text fixes made since are not carried over.</span>
             </div>
-          </div>
-
-          <h4>4. Grouping and style</h4>
-          <details className="caption-grouping" open>
-            <summary>Grouping — how words are split into captions</summary>
             <div className="caption-settings">
               {catalog.grouping.map((spec) => (
                 <label key={spec.name} className="field" title={spec.description}>
@@ -794,114 +619,69 @@ export default function CaptionsPanel({
                 </label>
               ))}
             </div>
-            <div className="row">
-              <button type="button" disabled={busy || stale} onClick={() => void regroup()}>
-                Regroup from the transcript
-              </button>
-              <span className="small">
-                Creates a new revision; the current one stays saved. Grouping never transcribes again.
-              </span>
-            </div>
-          </details>
+          </section>
 
-          <details className="caption-style" open>
-            <summary>
-              Style {styleDirty && <span className="badge warn">Unsaved</span>}
-            </summary>
-            <CaptionStyleForm catalog={catalog} style={style} onChange={setStyle} />
+          <details className="caption-export">
+            <summary>Export the captions on their own (optional)</summary>
+            {!catalog.renderer.ready && (
+              <div className="message warn">
+                {catalog.renderer.problems.map((problem) => (
+                  <p key={problem}>{problem}</p>
+                ))}
+                {catalog.renderer.node && catalog.renderer.packages_installed && (
+                  <button type="button" onClick={() => void prepareRenderer()} disabled={busy || preparing}>
+                    {preparing ? 'Preparing…' : 'Prepare renderer'}
+                  </button>
+                )}
+              </div>
+            )}
             <div className="row">
-              <button type="button" className="primary" disabled={busy || !styleDirty} onClick={() => void storeStyle()}>
-                Save style
-              </button>
-              <button type="button" disabled={busy || !styleDirty} onClick={() => savedStyle && setStyle(savedStyle)}>
-                Discard style changes
-              </button>
               <button
                 type="button"
-                disabled={busy}
-                onClick={() => setStyle(catalog.style_defaults)}
-                title="Back to the template's defaults (not saved until you press Save style)"
+                disabled={busy || exportBlocked !== null || !catalog.renderer.ready}
+                onClick={() => void exportAs('mp4')}
               >
-                Template defaults
+                Export MP4 with captions
               </button>
+              <button type="button" disabled={busy || exportBlocked !== null} onClick={() => void exportAs('srt')}>
+                Export SRT
+              </button>
+              {exportBlocked && <span className="small">{exportBlocked}</span>}
             </div>
-            <p className="small">
-              Fonts are bundled ({catalog.fonts.map((font) => font.label).join(', ')}; {catalog.fonts[0]?.license}) and
-              never fetched from the internet. Word highlighting only applies to captions that still have word timing.
-            </p>
+            {state && state.exports.length > 0 && (
+              <ul className="caption-exports">
+                {state.exports.map((record) => (
+                  <li key={record.export_id}>
+                    <div className="job-header">
+                      <strong>{record.format.toUpperCase()}</strong>
+                      <span
+                        className={`badge ${record.status === 'succeeded' ? 'ok' : record.status === 'running' ? '' : 'bad'}`}
+                      >
+                        {record.status}
+                      </span>
+                      {record.stale && <span className="badge warn">Video changed since</span>}
+                      <span className="small">
+                        {new Date(record.created_at).toLocaleString()} · revision {record.revision} ·{' '}
+                        {record.caption_count} captions
+                      </span>
+                    </div>
+                    {record.error && <p className="small">{record.error}</p>}
+                    {record.downloadable && (
+                      <span className="row">
+                        {record.format === 'mp4' && (
+                          <a href={captionExportUrl(projectId, record.export_id, false)} target="_blank" rel="noreferrer">
+                            Play
+                          </a>
+                        )}
+                        <a href={captionExportUrl(projectId, record.export_id, true)}>Download {record.output?.filename}</a>
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </details>
-
-          {/* 6. Export */}
-          <h4>5. Export</h4>
-          {!catalog.renderer.ready && (
-            <div className="message warn">
-              {catalog.renderer.problems.map((problem) => (
-                <p key={problem}>{problem}</p>
-              ))}
-              {catalog.renderer.node && catalog.renderer.packages_installed && (
-                <button type="button" onClick={() => void prepareRenderer()} disabled={busy || preparing}>
-                  {preparing ? 'Preparing…' : 'Prepare renderer'}
-                </button>
-              )}
-            </div>
-          )}
-          <div className="row">
-            <button
-              type="button"
-              className="primary"
-              disabled={busy || exportBlocked !== null || !catalog.renderer.ready}
-              onClick={() => void exportAs('mp4')}
-            >
-              Export MP4 with captions
-            </button>
-            <button type="button" disabled={busy || exportBlocked !== null} onClick={() => void exportAs('srt')}>
-              Export SRT
-            </button>
-            {exportBlocked && <span className="small">{exportBlocked}</span>}
-          </div>
-          <p className="small">
-            The MP4 has the captions burned in, at the video&apos;s own size, with its original audio. The SRT carries
-            only text and timing: players and editors show it in their own style, not this one.
-          </p>
         </>
-      )}
-
-      {state && state.exports.length > 0 && (
-        <ul className="caption-exports">
-          {state.exports.map((record) => (
-            <li key={record.export_id}>
-              <div className="job-header">
-                <strong>{record.format.toUpperCase()}</strong>
-                <span className={`badge ${record.status === 'succeeded' ? 'ok' : record.status === 'running' ? '' : 'bad'}`}>
-                  {record.status}
-                </span>
-                {record.stale && <span className="badge warn">Video changed since</span>}
-                <span className="small">
-                  {new Date(record.created_at).toLocaleString()} · revision {record.revision} · style{' '}
-                  {record.style_revision} · {record.caption_count} captions
-                </span>
-              </div>
-              {record.verification && record.format === 'mp4' && (
-                <p className="small">
-                  Checked with FFprobe: {String(record.verification.width)}×{String(record.verification.height)}, H.264 +
-                  AAC, {String(record.verification.duration_seconds)} s (source {String(record.verification.source_seconds)}{' '}
-                  s, tolerance ±{String(record.verification.tolerance_seconds)} s).
-                </p>
-              )}
-              {record.error && <p className="small">{record.error}</p>}
-              {record.downloadable && (
-                <span className="row">
-                  {record.format === 'mp4' && (
-                    <a href={captionExportUrl(projectId, record.export_id, false)} target="_blank" rel="noreferrer">
-                      Play
-                    </a>
-                  )}
-                  <a href={captionExportUrl(projectId, record.export_id, true)}>Download {record.output?.filename}</a>
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
       )}
     </section>
   )

@@ -66,7 +66,13 @@ def client():
 
 @pytest.fixture
 def project(client):
-    return client.post("/projects", json={"name": "בי-רול"}).json()
+    created = client.post("/projects", json={"name": "בי-רול"}).json()
+    # These tests cover B-roll's own export, which is what approving does with
+    # the music stage switched off. The default hand-over to music (stage 4)
+    # is tested in test_music.py.
+    response = client.put(f"/projects/{created['id']}/music/settings", json={"enabled": False})
+    assert response.status_code == 200, response.text
+    return created
 
 
 @pytest.fixture
@@ -96,7 +102,7 @@ def media_dir(tmp_path):
     return folder
 
 
-def make_image(path: Path, colour="red", size="640x360") -> Path:
+def make_image(path: Path, colour="red", size="360x640") -> Path:
     ffmpeg("-f", "lavfi", "-i", "color=c=%s:size=%s" % (colour, size), "-frames:v", "1", path)
     return path
 
@@ -184,8 +190,8 @@ def test_importing_measures_the_file_and_references_it_in_place(client, image, c
     video = import_asset(client, clip)
 
     assert picture["media_type"] == "image" and picture["status"] == "available"
-    assert picture["measured"]["width"] == 640 and picture["measured"]["height"] == 360
-    assert picture["measured"]["aspect_ratio"] == pytest.approx(16 / 9, abs=1e-4)
+    assert picture["measured"]["width"] == 360 and picture["measured"]["height"] == 640
+    assert picture["measured"]["aspect_ratio"] == pytest.approx(9 / 16, abs=1e-4)
     assert picture["measured"]["duration_seconds"] is None and picture["measured"]["has_audio"] is False
     assert picture["storage"] == "referenced" and picture["display_name_source"] == "filename"
     assert picture["description"] is None and picture["tags"] == []
@@ -282,7 +288,8 @@ def validate(client, ready, placements):
         (lambda s: [placement(s["image"], 0.5, 1.5, template_id="kenburns")], "Unknown template"),
         (lambda s: [placement(s["image"], 0.5, 1.5, settings={"fit": "stretch"})], "Fit must be one of"),
         (lambda s: [placement(s["image"], 0.5, 1.5, settings={"opacity": 0.5})], "Unknown setting"),
-        (lambda s: [placement(s["image"], 0.5, 1.5, template_id="pip", settings={"size_percent": 90})], "between 20 and 60"),
+        (lambda s: [placement(s["image"], 0.5, 1.5, template_id="pip", settings={"size_percent": 95})], "between 10 and 90"),
+        (lambda s: [placement(s["image"], 0.5, 1.5, template_id="pip", settings={"rotation_degrees": 60})], "between -45 and 45"),
         (lambda s: [placement(s["image"], "0.5", 1.5)], "finite"),
         (lambda s: [placement(s["image"], -0.1, 1.5)], "before the beginning"),
         (lambda s: [placement(s["image"], 3.0, 4.5)], "after the end"),
@@ -294,7 +301,7 @@ def validate(client, ready, placements):
         (lambda s: [placement(s["image"], 0.0, 1.0, source_start=0.5)], "image has no in-point"),
         (lambda s: [{**placement(s["image"], 0.0, 1.0), "command": "del"}], "unknown field"),
         (lambda s: [placement(s["image"], 0.0, 1.0), placement(s["clip"], 2.0, 3.0, pid="p00000001")], "repeats the id"),
-        (lambda s: [placement(s["image"], 0.5, 2.0), placement(s["clip"], 1.5, 3.0, pid="p00000002")], "overlap"),
+        (lambda s: [placement(s["image"], 0.5, 2.0), placement(s["clip"], 1.5, 3.0, template_id="pip", pid="p00000002")], "overlap"),
     ],
 )
 def test_invalid_placements_are_refused_with_a_reason(client, ready, build, fragment):
@@ -319,7 +326,10 @@ def test_valid_placements_back_to_back_and_defaults_filled(client, ready):
     assert result["valid"], result["errors"]
     first, second, third = result["placements"]
     assert first["settings"] == {"fit": "contain", "caption_scrim": True, "muted": True}
-    assert second["settings"] == {"position": "auto", "size_percent": 40.0, "margin_percent": 4.0, "muted": True}
+    assert second["settings"] == {
+        "position": "auto", "size_percent": 70.0, "margin_percent": 4.0,
+        "x_percent": 50.0, "y_percent": 30.0, "rotation_degrees": 0.0, "muted": True,
+    }
     assert first["end"] == second["start"] and third["end"] == 4.0 and third["start"] == 3.5
 
 
@@ -365,7 +375,7 @@ def test_revisions_are_immutable_conflicts_are_refused_and_plans_survive_a_resta
 def test_the_planner_path_is_validated_exactly_like_manual_edits(client, ready):
     pid, key = ready["project"], ready["key"]
     response = client.put(f"/projects/{pid}/broll/inputs/{key}/plan", json={
-        "placements": [placement(ready["image"], 0.5, 2.0), placement(ready["clip"], 1.0, 2.0, pid="p00000002")],
+        "placements": [placement(ready["image"], 0.5, 2.0), placement(ready["clip"], 1.0, 2.0, template_id="pip", pid="p00000002")],
         "base_revision": 0, "origin": "planner",
     })
     assert response.status_code == 400 and "overlap" in response.json()["detail"]
@@ -388,8 +398,8 @@ def test_props_are_resolved_once_for_preview_and_export(client, ready):
     assert props["captions"] == [] and props["broll"]["caption_band"] is None
     full, pip = props["broll"]["placements"]
     assert full["settings"]["fit"] == "contain" and full["asset"]["media_type"] == "image"
-    # "auto" is resolved on the backend from the caption style (default: lower half → top corner).
-    assert pip["settings"]["position"] == "top_right" and pip["source_start"] == 0.0
+    # "auto" is resolved on the backend: centred just above the captions (real-world trial).
+    assert pip["settings"]["position"] == "above_captions" and pip["source_start"] == 0.0
     assert "src" not in pip["asset"] and "path" not in json.dumps(props)
 
     digest = state["composition_digest"]
@@ -530,7 +540,10 @@ def test_a_real_export_composes_zooms_broll_and_hebrew_captions_correctly(client
     picture, video = import_asset(client, image), import_asset(client, clip)
     saved = client.put(f"/projects/{pid}/broll/inputs/{zoom_key}/plan", json={"base_revision": 0, "placements": [
         placement(picture["id"], 0.6, 1.4, pid="p0000000a"),
-        placement(video["id"], 2.0, 3.2, template_id="pip", source_start=0.5, pid="p0000000b"),
+        # Pinned to the top-right corner at 40 % (the pixel checks below); the
+        # default above-captions position is covered by tests/broll.test.ts.
+        placement(video["id"], 2.0, 3.2, template_id="pip", source_start=0.5, pid="p0000000b",
+                  settings={"position": "top_right", "size_percent": 40}),
     ]})
     assert saved.status_code == 201, saved.text
     state = state_of(client, pid, zoom_key)
@@ -566,13 +579,14 @@ def test_a_real_export_composes_zooms_broll_and_hebrew_captions_correctly(client
     top = (slice(0, 200), slice(None))
     # Before the cutaway: exactly the zoomed, captioned reference.
     assert psnr(_frame(exported, 14)[top], _frame(reference_file, 14)[top]) > 35
-    # Full-frame at frame 15 (= ceil(0.6 × 25)) through 34: the speaker is hidden, the
-    # image is letterboxed (contain) and NOT zoomed — 360 wide, 202–203 rows tall.
+    # Full-frame at frame 15 (= ceil(0.6 × 25)) through 34: the speaker is hidden and the
+    # video-shaped (9:16) image fills the frame, NOT zoomed. Only the top 300 rows are
+    # checked: the caption scrim darkens the lower part.
     for index in (15, 25, 34):
         frame = _frame(exported, index)
-        red_rows = [y for y in range(640) if frame[y, 180, 0] > 200 and frame[y, 180, 1] < 60 and frame[y, 180, 2] < 60]
-        assert abs(len(red_rows) - 202.5) <= 3, (index, len(red_rows))
-        assert frame[:180].max() < 40, index  # black bar above, no grid showing through
+        red_rows = [y for y in range(300) if frame[y, 180, 0] > 200 and frame[y, 180, 1] < 60 and frame[y, 180, 2] < 60]
+        assert len(red_rows) >= 297, (index, len(red_rows))
+        assert frame[:180, :, 0].min() > 200, index  # red edge to edge, no grid showing through
     # Frame 35 (= ceil(1.4 × 25)): the speaker is back, at the zoomed framing of that moment.
     assert psnr(_frame(exported, 35)[top], _frame(reference_file, 35)[top]) > 35
     # (Remotion shifts fully saturated test colours a little against the FFmpeg file —

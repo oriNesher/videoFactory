@@ -30,14 +30,14 @@ EXPORT_SCHEMA_VERSION = 1
 EXPORTS_SUBDIRECTORY = "broll"
 
 
-def exports_root(project_id: str) -> Path:
-    return storage.project_directory(project_id) / "exports" / EXPORTS_SUBDIRECTORY
+def exports_root(project_id: str, subdirectory: str = EXPORTS_SUBDIRECTORY) -> Path:
+    return storage.project_directory(project_id) / "exports" / subdirectory
 
 
-def export_directory(project_id: str, export_id: Any) -> Path:
+def export_directory(project_id: str, export_id: Any, subdirectory: str = EXPORTS_SUBDIRECTORY) -> Path:
     if not isinstance(export_id, str) or len(export_id) != 12 or not all(c in "0123456789abcdef" for c in export_id):
         raise broll.BrollError("Export not found.", status_code=404)
-    return exports_root(project_id) / export_id
+    return exports_root(project_id, subdirectory) / export_id
 
 
 def active_job(project_id: str, key: str) -> dict | None:
@@ -105,6 +105,8 @@ def _changed_files(snapshot: dict) -> list[str]:
     changed = []
     files = [(snapshot["input"]["path"], snapshot["input"]["fingerprint"]["digest"], snapshot["input"]["filename"])]
     files += [(asset["path"], asset["digest"], asset["filename"]) for asset in snapshot["assets"]]
+    if snapshot.get("music"):  # the music stage's export (music_jobs)
+        files.append((snapshot["music"]["path"], snapshot["music"]["digest"], snapshot["music"]["filename"]))
     for path, digest, name in files:
         try:
             current = caption_inputs.fingerprint(path) if os.path.isfile(path) else None
@@ -123,17 +125,27 @@ def _write_record(directory: Path, record: dict) -> None:
 
 
 def run_export(context: jobs.JobContext) -> dict:
+    return render_export(context, subdirectory=EXPORTS_SUBDIRECTORY, suffix=".broll.mp4", kind="video_factory.broll_export")
+
+
+def render_export(context: jobs.JobContext, *, subdirectory: str, suffix: str, kind: str) -> dict:
+    """Render a composed snapshot to `exports/<subdirectory>/<id>/`.
+
+    Shared by the B-roll export and the music stage's final export: the
+    snapshot names the base video, the B-roll assets and (music only) the
+    track, and every one of them is checked before and after rendering.
+    """
     project_id = context.project_id
     snapshot = context.input
     export_id = uuid.uuid4().hex[:12]
-    directory = export_directory(project_id, export_id)
+    directory = export_directory(project_id, export_id, subdirectory)
     directory.mkdir(parents=True, exist_ok=False)
-    final = directory / ("%s.broll.mp4" % cutting.safe_stem(snapshot["input"]["filename"], "video"))
+    final = directory / ("%s%s" % (cutting.safe_stem(snapshot["input"]["filename"], "video"), suffix))
     partial = directory / ".partial.mp4"
 
     record = {
         "schema_version": EXPORT_SCHEMA_VERSION,
-        "kind": "video_factory.broll_export",
+        "kind": kind,
         "export_id": export_id,
         "project_id": project_id,
         "job_id": context.job_id,
@@ -148,6 +160,9 @@ def run_export(context: jobs.JobContext) -> dict:
         "captions": snapshot["captions"],
         "asset_digests": {asset["id"]: asset["digest"] for asset in snapshot["assets"]},
         "placement_count": len(snapshot["props"]["broll"]["placements"]),
+        "music": {"id": snapshot["music"]["id"], "digest": snapshot["music"]["digest"]} if snapshot.get("music") else None,
+        # The music decision a final export renders (approved or skipped); None for B-roll exports.
+        "decision": snapshot.get("decision"),
         "composition": snapshot["composition"],
         "export_settings": snapshot["export_settings"],
         "output": None,
@@ -170,7 +185,7 @@ def run_export(context: jobs.JobContext) -> dict:
         raise jobs.JobFailed("The export snapshot could not be saved: %s" % error) from error
     _write_record(directory, record)
 
-    context.progress("Checking the video and the B-roll files…")
+    context.progress("Checking the video, B-roll and music files…" if snapshot.get("music") else "Checking the video and the B-roll files…")
     changed = _changed_files(snapshot)
     if changed:
         message = (
@@ -188,6 +203,7 @@ def run_export(context: jobs.JobContext) -> dict:
             "props": snapshot["props"],
             "input_path": snapshot["input"]["path"],
             "assets": [{"id": asset["id"], "path": asset["path"]} for asset in snapshot["assets"]],
+            "music": {"id": snapshot["music"]["id"], "path": snapshot["music"]["path"]} if snapshot.get("music") else None,
             "output_path": str(partial),
             "bundle_cache_dir": str(caption_jobs.bundle_cache_directory()),
             "crf": settings["crf"],
@@ -222,15 +238,18 @@ def run_export(context: jobs.JobContext) -> dict:
     record["output"] = {"filename": final.name, "size_bytes": final.stat().st_size, "media_type": "video/mp4"}
     record["verification"] = verification
     finish(caption_jobs.EXPORT_SUCCEEDED)
+    parts = ["%d B-roll placement(s)" % record["placement_count"]]
+    if record["music"]:
+        parts.append("background music")
     return {
         "export_id": export_id,
-        "summary": "Exported %s with %d B-roll placement(s) (%.1f s, %d×%d)."
-        % (final.name, record["placement_count"], verification["duration_seconds"], verification["width"], verification["height"]),
+        "summary": "Exported %s with %s (%.1f s, %d×%d)."
+        % (final.name, " and ".join(parts), verification["duration_seconds"], verification["width"], verification["height"]),
     }
 
 
-def read_export(project_id: str, export_id: Any) -> dict:
-    directory = export_directory(project_id, export_id)
+def read_export(project_id: str, export_id: Any, subdirectory: str = EXPORTS_SUBDIRECTORY) -> dict:
+    directory = export_directory(project_id, export_id, subdirectory)
     try:
         record = storage.read_json(directory / "export.json")
     except FileNotFoundError as error:
@@ -243,25 +262,25 @@ def read_export(project_id: str, export_id: Any) -> dict:
     return record
 
 
-def list_exports(project_id: str) -> list[dict]:
-    root = exports_root(project_id)
+def list_exports(project_id: str, subdirectory: str = EXPORTS_SUBDIRECTORY) -> list[dict]:
+    root = exports_root(project_id, subdirectory)
     if not root.is_dir():
         return []
     records = []
     for directory in root.iterdir():
         try:
-            records.append(read_export(project_id, directory.name))
+            records.append(read_export(project_id, directory.name, subdirectory))
         except storage.ProjectError:
             continue
     records.sort(key=lambda record: record.get("created_at") or "", reverse=True)
     return records
 
 
-def resolve_export_file(project_id: str, export_id: Any) -> tuple[Path, dict]:
-    record = read_export(project_id, export_id)
+def resolve_export_file(project_id: str, export_id: Any, subdirectory: str = EXPORTS_SUBDIRECTORY) -> tuple[Path, dict]:
+    record = read_export(project_id, export_id, subdirectory)
     if not record["downloadable"]:
         raise broll.BrollError("This export has no finished file.", status_code=404)
-    directory = export_directory(project_id, record["export_id"]).resolve()
+    directory = export_directory(project_id, record["export_id"], subdirectory).resolve()
     path = (directory / record["output"]["filename"]).resolve()
     if not path.is_relative_to(directory) or not path.is_file():
         raise broll.BrollError("The exported file is no longer in its folder.", status_code=404)

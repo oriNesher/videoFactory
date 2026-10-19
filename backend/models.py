@@ -222,6 +222,21 @@ class BrollDecisionRequest(BaseModel):
     composition_digest: Any = None
 
 
+class AudioImportRequest(BaseModel):
+    # Absolute path to an audio file; null opens the machine's file dialog.
+    path: Any = None
+    kind: Any = "music"
+
+
+class AudioRenameRequest(BaseModel):
+    display_name: Any = None
+
+
+class MusicDecisionRequest(BaseModel):
+    # The digest of the composition the reviewer was shown.
+    composition_digest: Any = None
+
+
 class PipelineAcceptRequest(BaseModel):
     # The candidate token the screen showed: accept exactly that, nothing newer.
     token: Any = None

@@ -13,7 +13,7 @@ transcript plus your own asset descriptions (see
 [Automatic B-roll](#automatic-b-roll-stage-3b)). Video, audio and pictures
 never leave the computer.
 
-Current state: **stage 3B** — projects, background jobs, structured AI
+Current state: **stage 4 (background music)** — projects, background jobs, structured AI
 editing plans, cutting in two modes (**boundary-only trimming**, the default,
 and **full-clip silence removal** with Auto-Editor), **captions** (local
 Hebrew transcription with Whisper, editable caption revisions, a Remotion
@@ -22,10 +22,13 @@ zooms from the transcript, FFmpeg renders them, you review and approve), the
 **B-roll foundation** (a local library of your own images and videos, a
 validated placement plan, full-frame and picture-in-picture templates
 composed between the (zoomed) speaker and the captions, review, approval and
-export) and now **automatic B-roll**: Gemini chooses which described assets
-to show, where, for how long and with which template; you watch the composed
-result and approve it. See [B-roll](#b-roll-stage-3a),
-[Automatic B-roll](#automatic-b-roll-stage-3b) and
+export), **automatic B-roll** (Gemini chooses which described assets to show,
+where, for how long and with which template; you watch the composed result
+and approve it) and now **background music**: a track from your own music
+library mixed under the speaker, previewed live and approved before the final
+export. See [B-roll](#b-roll-stage-3a),
+[Automatic B-roll](#automatic-b-roll-stage-3b),
+[Background music](#background-music-stage-4) and
 [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Requirements
@@ -282,10 +285,10 @@ kept.
 
 | Setting | Unit | Default | What it does |
 | --- | --- | --- | --- |
-| Detection threshold | ratio, 0–1 | `0.04` | How loud a sound must be to count. **Lower** catches quieter sound and more background noise. |
-| Padding before the start | seconds | `0.15` | Kept before the first detected sound, so a soft first consonant or a breath is not clipped. |
-| Padding after the end | seconds | `0.35` | Kept after the last detected sound, so the last word can decay and the join has a moment to breathe. |
-| Ignore sounds shorter than | seconds | `0.20` | A sound shorter than this cannot set the start or the end. `0` turns the rule off. |
+| Threshold | ratio, 0–1 | `0.04` | How loud a sound must be to count. **Lower** catches quieter sound and more background noise. |
+| Before start | seconds | `0.15` | Kept before the first detected sound, so a soft first consonant or a breath is not clipped. |
+| After end | seconds | `0.35` | Kept after the last detected sound, so the last word can decay and the join has a moment to breathe. |
+| Ignore (sounds shorter than) | seconds | `0.20` | A sound shorter than this cannot set the start or the end. `0` turns the rule off. |
 | Preview length | seconds | `4` | How much of the edited clip each preview shows (1–15). Does not affect the cut. |
 
 These are a separate set from the five full-clip settings. The threshold means
@@ -1143,7 +1146,7 @@ history and details**, where any earlier revision can be restored.
 | Template | What it does | Settings (default) |
 | --- | --- | --- |
 | `fullframe` — **Full-frame cutaway** | The asset replaces the speaker's picture for the length of the placement; the speaker's audio continues underneath. | `fit`: `contain` (whole asset, black bars where shapes differ, nothing cropped) or `cover` (fills the frame, overflow cropped equally from both sides); `caption_scrim` (`true`: a soft dark gradient on the captions' side); `muted` (`true`) |
-| `pip` — **Picture-in-picture** | The asset in a box in one corner; the speaker stays visible. | `position`: `auto` (the right-hand corner on the opposite half from the captions — top-right with the default caption position), or a fixed corner; `size_percent` 20–60 (`40`, % of the frame width); `margin_percent` 2–10 (`4`, % of the shorter side); `muted` (`true`) |
+| `pip` — **Picture-in-picture** | The asset in a plain box (no border) over the speaker. | `position`: `auto` = `above_captions` (centred, just above the caption line; just below it when captions are at the top), a fixed corner, or `custom` (`x_percent` / `y_percent`: the box's centre); `size_percent` 10–90 (`70`, % of the frame width; the planner uses 40–80); `rotation_degrees` −45–45 (`0`); `margin_percent` 2–10 (`4`, % of the shorter side, corners only); `muted` (`true`) |
 
 - **No stretching, ever.** A picture-in-picture box takes the asset's own
   aspect ratio (its height is capped at 45 % of the frame height; the box
@@ -1462,6 +1465,65 @@ They are never turned into an empty plan.
 - The plan belongs to one exact video: re-cutting or re-zooming makes a new
   base video, which is planned again.
 
+## Background music (stage 4)
+
+The sixth stage, after B-roll. Approving or skipping B-roll no longer exports:
+it continues here. You choose a music track, set how it sits under the
+speaker, listen to it in the preview beside the stage, and then either
+**Approve music and export** or **Continue without music**. Either one runs
+the final export: the video, the B-roll you approved, the captions and (unless
+you skipped it) the music. Sound effects will be added to this stage later.
+
+### The music library
+
+One library of tracks shared by every video, under
+`workspace\library\audio\library.json`, managed from the **Music library** tab
+in the header or from inside the Music stage. **Add a track…** opens the
+Windows file dialog (MP3, WAV, M4A, AAC, OGG, Opus, FLAC); you can also paste
+a full path. Each track can be listened to, renamed, re-measured and removed. As with B-roll, a track is
+**referenced where it is, never copied**: moving or editing the file shows it
+as missing or changed, and a changed track must be re-measured before it is
+used again. Removing a track removes the library entry only. Use music you
+have the rights to publish.
+
+### The mix
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Volume under the speaker | 15 % | Linear gain of the music. The speaker's own sound is never changed |
+| Start in the track | 0 s | Where in the track the video's first frame starts |
+| Fade in / Fade out | 1 s / 2 s | From silence at the start, to silence where the music ends |
+| Loop | on | A track shorter than the video starts again from the start point. Off: the music stops (fading out) where the track ends |
+
+Settings are saved as you change them and the preview picks them up on its
+next refresh. The music is a layer of the same Remotion composition as the
+captions and B-roll, so the preview and the export mix it identically.
+
+### Approval and export
+
+Like B-roll, the decision names exactly what was composed: the video, the
+B-roll decision it builds on, the captions, the track's fingerprint and every
+setting. Changing any of them (re-deciding B-roll, re-recording the track,
+moving the volume) marks the decision outdated and reopens the stage. The
+stage cannot be decided until B-roll is approved or skipped.
+
+The export is written to `exports\final\<id>\<name>.final.mp4`, with a
+snapshot of what it was made from. When it is done, **Open in VLC** plays the
+file and **Show in File Explorer** opens its folder with the file selected. If nothing at all is added to the video
+(no captions, no B-roll, no music), the video itself is the finished file and
+nothing is rendered.
+
+**Switching the stage off** (Settings, in the stage) restores the earlier
+flow: approving or skipping B-roll exports directly.
+
+### Known limitations (music)
+
+- No automatic ducking: the music stays at one level under speech. Choose a
+  volume that leaves the voice clear.
+- One track per video; no music in only part of the video.
+- A loop restarts at the start point with a hard join; seamless loops depend
+  on the track.
+
 ## Subtitles with Whisper (per cutting run, older)
 
 The in-app replacement for `legacy/Whisper/transcribe_video.bat`, and the step
@@ -1627,7 +1689,10 @@ tools are not on `PATH`, those tests skip rather than fail.
 | B-roll plans (immutable revisions) | `…\intermediates\broll\plans\<plan-id>\rev-000N.json` |
 | B-roll approve / skip decisions | `…\intermediates\broll\decisions\<video-key>.json` |
 | B-roll planning runs (immutable) | `…\intermediates\broll\planner\runs\<run-id>.json` (provenance, reasons, the exact request); rejected answers `…\planner\rejected-<id>.json` |
-| B-roll exports | `workspace\projects\<project-id>\exports\broll\<export-id>\` (`export.json`, `snapshot.json`, `<name>.broll.mp4`, `logs\`) |
+| B-roll exports (music stage off) | `workspace\projects\<project-id>\exports\broll\<export-id>\` (`export.json`, `snapshot.json`, `<name>.broll.mp4`, `logs\`) |
+| Music library (all projects) | `workspace\library\audio\library.json` (the tracks themselves stay where they are) |
+| Music approve / skip decisions | `…\intermediates\music\decisions\<video-key>.json` |
+| Final exports (after the music stage) | `workspace\projects\<project-id>\exports\final\<export-id>\` (`export.json`, `snapshot.json`, `<name>.final.mp4`, `logs\`) |
 | Remotion render bundle | `workspace\cache\remotion-bundles\` |
 | Whisper models | `%USERPROFILE%\.cache\huggingface\hub` |
 | Exports | `workspace\projects\<project-id>\exports\` |
@@ -1748,7 +1813,7 @@ mechanism on test tones; only you can tell whether a cut *sounds* right.
 21. On clip 1 press **Render preview** next to **Opening**. Play **Source**
     first, then **Edited**.
 22. Render **Ending** on clip 1 and **Join with the next clip**.
-23. Adjust: change **Padding after the end** (every preview turns **Out of
+23. Adjust: change **After end** (every preview turns **Out of
     date**, with the reason), or press **Adjust clips individually** and then
     **+** / **−** on one clip's **Start**
     (only that clip's previews and its join go out of date). **Render again**
@@ -1776,14 +1841,14 @@ mechanism on test tones; only you can tell whether a cut *sounds* right.
 
 - **First word.** In the opening preview, is the first consonant whole? Soft
   starts ("h", "s", "f", a vowel) are the ones that get clipped. If it is
-  clipped, raise *Padding before the start* or lower the *Detection threshold*.
+  clipped, raise *Before start* or lower the *Threshold*.
 - **What is left before it.** Is there an audible breath, click or lip noise
   before the first word? If it sounds wrong, lower the padding or nudge
   **Start** later for that clip.
 - **What was removed.** In the **Source** player, is anything you wanted —
   a deliberate breath, a quiet first word — in the part marked as removed?
 - **Last word.** In the ending preview, does the last syllable decay fully, or
-  is it chopped? Raise *Padding after the end* if it is chopped.
+  is it chopped? Raise *After end* if it is chopped.
 - **The tail.** After the last word, is the remaining pause about what you
   would leave when speaking? Does a mouse click or a chair noise survive
   there? If it does, nudge **End** earlier on that clip.

@@ -492,9 +492,12 @@ def make_grid_video(path: Path, seconds=4, size="320x240", rate=25, colour=None)
 def project(client):
     created = client.post("/projects", json={"name": "זומים"}).json()
     # These tests cover approval going straight to the export, which is what
-    # happens with the B-roll step switched off. The default hand-over to
-    # B-roll (stage 3A) is tested in test_broll.py.
+    # happens with the B-roll and music steps switched off. The default
+    # hand-over to B-roll (stage 3A) is tested in test_broll.py, to music
+    # (stage 4) in test_music.py.
     response = client.put(f"/projects/{created['id']}/broll/settings", json={"enabled": False})
+    assert response.status_code == 200, response.text
+    response = client.put(f"/projects/{created['id']}/music/settings", json={"enabled": False})
     assert response.status_code == 200, response.text
     return created
 
@@ -939,8 +942,12 @@ def test_captions_keep_their_size_and_position_over_the_zoomed_video(client, pro
     zoomed_file, _ = caption_jobs.resolve_export_file(project["id"], exports["zoom.%s" % run_id]["export_id"])
     clean_file, _ = caption_jobs.resolve_export_file(project["id"], exports[key]["export_id"])
     assert exports["zoom.%s" % run_id]["verification"]["streams"] == {"video": 1, "audio": 1}
-    # Frames where a caption is on screen (FAKE_WORDS span 0.2–2.9 s).
-    for index in (15, 40, 65):
+    # Frames in the middle of the first three captions, whatever the grouping
+    # (the 25 fps test video; a caption [start, end) is on frames ceil(start·fps)…).
+    shown = captions.read_revision(project["id"], reference["transcript_id"], reference["revision"])["captions"]
+    frames = [int((caption["start"] + caption["end"]) / 2 * 25) for caption in shown[:3]]
+    assert len(frames) == 3
+    for index in frames:
         a, b = frame_rgb(zoomed_file, index), frame_rgb(clean_file, index)
         assert psnr(a, b) > 40, index
         assert np.abs(a - frame_rgb(flat, index)).max() > 100, "no caption visible at frame %d" % index

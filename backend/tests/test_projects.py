@@ -556,6 +556,26 @@ def test_open_source_launches_vlc_with_the_projects_own_path(client, video, monk
     assert launched == [["vlc.exe", str(video)]]
 
 
+def test_open_preview_input_launches_vlc_with_the_resolved_path(client, video, monkeypatch):
+    """The preview's VLC button names an input key; the backend finds the file."""
+    from backend import player
+
+    launched = []
+    monkeypatch.setattr(player, "find_vlc", lambda: "vlc.exe")
+    monkeypatch.setattr(player, "launch", launched.append)
+
+    project = add_source(client, create(client)["id"], video).json()
+    key = "source.%s" % project["sources"][0]["id"]
+
+    response = client.post(f"/projects/{project['id']}/captions/inputs/{key}/open")
+    assert response.status_code == 200, response.text
+    assert launched == [["vlc.exe", str(video)]]
+
+    unknown = client.post(f"/projects/{project['id']}/captions/inputs/source.nope/open")
+    assert unknown.status_code == 404
+    assert len(launched) == 1
+
+
 def test_open_unknown_source_is_rejected(client, monkeypatch):
     from backend import player
 

@@ -104,6 +104,7 @@ export function AssetImport({
   busy,
   act,
   setMessage,
+  compact = false,
 }: {
   /** Null: the general library, with no choice offered. */
   projectId: string | null
@@ -113,6 +114,8 @@ export function AssetImport({
   busy: boolean
   act: Act
   setMessage: (message: Message) => void
+  /** Without the storage and file-format note. */
+  compact?: boolean
 }) {
   const [path, setPath] = useState('')
   const [showPath, setShowPath] = useState(false)
@@ -178,7 +181,9 @@ export function AssetImport({
           </button>
         </form>
       )}
-      <p className="small hint">{storageNote} PNG, JPEG, WebP; H.264, VP8/9 or AV1 video (MP4, MOV, WebM, MKV).</p>
+      {!compact && (
+        <p className="small hint">{storageNote} PNG, JPEG, WebP; H.264, VP8/9 or AV1 video (MP4, MOV, WebM, MKV).</p>
+      )}
     </>
   )
 }
@@ -279,17 +284,94 @@ export function AssetEditor({
   projectId = null,
   busy,
   act,
+  compact = false,
 }: {
   asset: BrollLibraryAsset
   projectId?: string | null
   busy: boolean
   act: Act
+  /** One-line fields with short titles and no explanations (the library window). */
+  compact?: boolean
 }) {
   const [name, setName] = useState(asset.display_name_source === 'user' ? asset.display_name : '')
   const [description, setDescription] = useState(asset.description ?? '')
   const [tags, setTags] = useState(asset.tags.join(', '))
   const [moments, setMoments] = useState(asset.moments.map(formatMoment).join('\n'))
   const [momentError, setMomentError] = useState<string | null>(null)
+
+  function save() {
+    const parsed = parseMoments(moments)
+    if (typeof parsed === 'string') {
+      setMomentError(parsed)
+      return
+    }
+    setMomentError(null)
+    void act(async () => {
+      await updateBrollAsset(
+        asset.id,
+        {
+          display_name: name.trim() || null,
+          description: description.trim() || null,
+          tags: splitTags(tags),
+          ...(asset.media_type === 'video' ? { moments: parsed } : {}),
+        },
+        projectId,
+      )
+    }, 'Saving failed.')
+  }
+
+  function remove() {
+    const scope = asset.library === 'general' ? ' Every video loses it.' : ''
+    if (window.confirm(`Remove "${asset.display_name}" from the library?${scope} The file itself is not touched.`))
+      void act(async () => void (await removeBrollAsset(asset.id, projectId)), 'Removing failed.')
+  }
+
+  if (compact) {
+    return (
+      <div className="asset-editor compact">
+        <label className="field">
+          <span>Description</span>
+          <input
+            type="text"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            onKeyDown={(event) => event.key === 'Enter' && save()}
+            dir="auto"
+          />
+        </label>
+        <label className="field">
+          <span>Name</span>
+          <input type="text" value={name} onChange={(event) => setName(event.target.value)} placeholder={asset.filename} />
+        </label>
+        <label className="field">
+          <span>Tags</span>
+          <input type="text" value={tags} onChange={(event) => setTags(event.target.value)} dir="auto" />
+        </label>
+        {asset.media_type === 'video' && (
+          <label className="field">
+            <span>Moments</span>
+            <textarea
+              rows={1}
+              value={moments}
+              onChange={(event) => setMoments(event.target.value)}
+              placeholder="0:05-0:12 what is shown"
+              dir="auto"
+            />
+          </label>
+        )}
+        <div className="row asset-editor-buttons">
+          <button type="button" className="primary" disabled={busy} onClick={save}>
+            Save
+          </button>
+          <button type="button" disabled={busy} onClick={remove}>
+            Remove
+          </button>
+          {projectId && <MoveButton asset={asset} projectId={projectId} busy={busy} act={act} compact />}
+        </div>
+        {momentError && <p className="message error">{momentError}</p>}
+      </div>
+    )
+  }
 
   return (
     <div className="asset-editor">
@@ -323,37 +405,14 @@ export function AssetEditor({
           type="button"
           className="primary"
           disabled={busy}
-          onClick={() => {
-            const parsed = parseMoments(moments)
-            if (typeof parsed === 'string') {
-              setMomentError(parsed)
-              return
-            }
-            setMomentError(null)
-            void act(async () => {
-              await updateBrollAsset(
-                asset.id,
-                {
-                  display_name: name.trim() || null,
-                  description: description.trim() || null,
-                  tags: splitTags(tags),
-                  ...(asset.media_type === 'video' ? { moments: parsed } : {}),
-                },
-                projectId,
-              )
-            }, 'Saving failed.')
-          }}
+          onClick={save}
         >
           Save details
         </button>
         <button
           type="button"
           disabled={busy}
-          onClick={() => {
-            const scope = asset.library === 'general' ? ' Every video loses it.' : ''
-            if (window.confirm(`Remove "${asset.display_name}" from the library?${scope} The file itself is not touched.`))
-              void act(async () => void (await removeBrollAsset(asset.id, projectId)), 'Removing failed.')
-          }}
+          onClick={remove}
         >
           Remove from library
         </button>
@@ -368,10 +427,21 @@ export function AssetEditor({
 }
 
 /** Share this video's asset with every video, or keep a general asset for this video alone. */
-function MoveButton({ asset, projectId, busy, act }: { asset: BrollLibraryAsset; projectId: string; busy: boolean; act: Act }) {
+function MoveButton({
+  asset,
+  projectId,
+  busy,
+  act,
+  compact = false,
+}: {
+  asset: BrollLibraryAsset
+  projectId: string
+  busy: boolean
+  act: Act
+  compact?: boolean
+}) {
   const toGeneral = asset.library === 'project'
-  return (
-    <div className="row">
+  const button = (
       <button
         type="button"
         disabled={busy}
@@ -389,8 +459,13 @@ function MoveButton({ asset, projectId, busy, act }: { asset: BrollLibraryAsset;
           )
         }}
       >
-        {toGeneral ? 'Share with all videos' : 'Make it this video’s only'}
+        {compact ? (toGeneral ? 'Share with all videos' : 'This video only') : toGeneral ? 'Share with all videos' : 'Make it this video’s only'}
       </button>
+  )
+  if (compact) return button
+  return (
+    <div className="row">
+      {button}
       <span className="small hint">
         {toGeneral ? 'Moves it to the general library.' : 'Moves it out of the general library.'}
       </span>

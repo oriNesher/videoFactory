@@ -27,10 +27,21 @@ export type FullframeSettings = {
 
 export type PipCorner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
 
+/**
+ * A corner; `above_captions` (centred, just above the caption line, or just
+ * below it when captions sit at the top); or `custom`: the box's centre at
+ * x_percent / y_percent of the frame.
+ */
+export type PipPosition = PipCorner | 'above_captions' | 'custom'
+
 export type PipSettings = {
-  position: PipCorner
+  position: PipPosition
   size_percent: number
   margin_percent: number
+  /** Plans saved before these settings existed do not have them. */
+  x_percent?: number
+  y_percent?: number
+  rotation_degrees?: number
   muted: boolean
 }
 
@@ -55,4 +66,12 @@ export type BrollProps = {
   placements: BrollPlacement[]
   /** Where captions sit, for the full-frame scrim; null without captions. */
   caption_band: 'top' | 'bottom' | null
+  /** The caption style's placement, to put a box just above the captions. Absent in older props. */
+  caption_layout?: CaptionLayout | null
+}
+
+export type CaptionLayout = {
+  position_percent: number
+  safe_margin_percent: number
+  font_size_percent: number
 }

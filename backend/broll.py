@@ -79,7 +79,7 @@ PLANNER_PREFERENCES = {
         "still only where they match what is said and never as decoration."
     ),
 }
-DEFAULT_PLANNER_PREFERENCE = "restrained"
+DEFAULT_PLANNER_PREFERENCE = "balanced"
 
 OVERLAP_POLICY = "reject"
 MIN_PLACEMENT_SECONDS = 0.2
@@ -417,6 +417,17 @@ def validate_placements(raw: Any, base: dict, assets: dict[str, dict]) -> tuple[
             fail("an image has no in-point; source_start must be null.", placement_id)
             continue
 
+        # Last, so a timing or setting problem is reported first.
+        measured = asset["measured"]
+        if item["template_id"] == broll_templates.FULLFRAME and not broll_templates.fits_full_frame(
+            measured["width"], measured["height"], base["width"], base["height"]
+        ):
+            fail(
+                "\"%s\" is %d×%d, not the video's shape, so it cannot fill the frame. Use picture-in-picture."
+                % (broll_library.public_entry(asset)["display_name"], measured["width"], measured["height"]),
+                placement_id,
+            )
+            continue
         placements.append(
             {
                 "id": placement_id,
@@ -544,6 +555,12 @@ def add_placement(
     template_id = template_id or broll_templates.DEFAULT_TEMPLATE
     if template_id not in broll_templates.TEMPLATES_BY_ID:
         raise BrollError("Unknown template.")
+    # Only an asset shaped like the video can be full-frame; anything else is
+    # added as picture-in-picture.
+    if template_id == broll_templates.FULLFRAME and not broll_templates.fits_full_frame(
+        asset["measured"]["width"], asset["measured"]["height"], base["width"], base["height"]
+    ):
+        template_id = broll_templates.PIP
     if not _finite(at_seconds):
         raise BrollError("The playhead position must be a number of seconds.")
 
@@ -708,6 +725,16 @@ def compose(project_id: str, key: Any) -> dict:
             ],
             # Where captions sit, so a full-frame cutaway can darken that side.
             "caption_band": ("bottom" if position >= 50 else "top") if overlay else None,
+            # Enough of the caption style to place a picture-in-picture box just
+            # above (or below) the caption line, as CaptionLayer lays it out.
+            "caption_layout": (
+                {
+                    "position_percent": position,
+                    "safe_margin_percent": style["safe_margin_percent"],
+                    "font_size_percent": style["font_size_percent"],
+                }
+                if overlay else None
+            ),
         },
     }
     asset_digests = {asset_id: entry["fingerprint"]["digest"] for asset_id, entry in sorted(assets_used.items())}

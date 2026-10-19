@@ -112,7 +112,7 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 1.0,
         "step": 0.005,
         "unit": "0–1",
-        "label": "Detection threshold",
+        "label": "Threshold",
         "description": (
             "How loud a sound must be to count as activity, as a share of full "
             "scale. Lower catches quieter sound (and more background noise). "
@@ -126,7 +126,7 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 5.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Padding before the start",
+        "label": "Before start",
         "description": (
             "Kept before the first detected sound, so a soft first consonant "
             "or a breath is not clipped."
@@ -139,7 +139,7 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 5.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Padding after the end",
+        "label": "After end",
         "description": (
             "Kept after the last detected sound, so the last word can decay "
             "and the join has a moment to breathe."
@@ -152,7 +152,7 @@ SETTINGS_SPEC: dict[str, dict] = {
         "max": 5.0,
         "step": 0.05,
         "unit": "seconds",
-        "label": "Ignore sounds shorter than",
+        "label": "Ignore",
         "description": (
             "A sound shorter than this is treated as noise (a click, a bump) "
             "and cannot set the start or the end."

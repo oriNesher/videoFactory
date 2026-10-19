@@ -33,7 +33,15 @@ TEMPLATE_CATALOG_VERSION = 1
 FULLFRAME = "fullframe"
 PIP = "pip"
 
-PIP_POSITIONS = ("auto", "top_left", "top_right", "bottom_left", "bottom_right")
+# What the automatic planner may choose. "custom" (a free position from
+# x_percent / y_percent) is a manual correction only.
+# above_captions: centred across the frame, just above the caption line (just
+# below it when captions sit at the top). auto resolves to it.
+PIP_PLANNER_POSITIONS = ("auto", "above_captions", "top_left", "top_right", "bottom_left", "bottom_right")
+PIP_POSITIONS = PIP_PLANNER_POSITIONS + ("custom",)
+# The sizes the planner may choose (real-world trial: bigger than before).
+PIP_PLANNER_MIN_SIZE = 40.0
+PIP_PLANNER_MAX_SIZE = 80.0
 
 TEMPLATES: list[dict] = [
     {
@@ -80,32 +88,65 @@ TEMPLATES: list[dict] = [
         "version": 1,
         "label": "Picture-in-picture",
         "description": (
-            "The asset in a box in one corner while the speaker stays visible. The box "
-            "has the asset's own aspect ratio, so nothing is cropped or stretched."
+            "The asset in a box over the speaker, by default centred just above the "
+            "captions. The box has the asset's own aspect ratio, so nothing is cropped "
+            "or stretched; no border."
         ),
         "settings": {
             "position": {
                 "type": "choice",
                 "choices": list(PIP_POSITIONS),
                 "default": "auto",
-                "label": "Corner",
+                "label": "Position",
                 "description": (
-                    "auto: the right-hand corner on the opposite half of the frame from the "
-                    "captions (top when captions sit in the lower half, which is the default)."
+                    "auto / above_captions: centred across the frame, just above the captions "
+                    "(just below them when captions sit at the top). A corner keeps the box "
+                    "there. custom: wherever Horizontal and Vertical put the box's centre."
                 ),
             },
             "size_percent": {
                 "type": "number",
-                "min": 20.0,
-                "max": 60.0,
-                "default": 40.0,
+                "min": 10.0,
+                "max": 90.0,
+                "default": 70.0,
                 "step": 1.0,
                 "label": "Size",
                 "unit": "% of the frame width",
                 "description": (
                     "The box's width. Its height follows the asset's aspect ratio and is "
-                    "limited to 45% of the frame height (the box shrinks to fit)."
+                    "limited to 45% of the frame height up to a size of 60, growing with "
+                    "the size above that (the box shrinks to fit)."
                 ),
+            },
+            "x_percent": {
+                "type": "number",
+                "min": 0.0,
+                "max": 100.0,
+                "default": 50.0,
+                "step": 1.0,
+                "label": "Horizontal",
+                "unit": "% from the left, custom position",
+                "description": "Where the box's centre is across the frame. Used when Position is custom.",
+            },
+            "y_percent": {
+                "type": "number",
+                "min": 0.0,
+                "max": 100.0,
+                "default": 30.0,
+                "step": 1.0,
+                "label": "Vertical",
+                "unit": "% from the top, custom position",
+                "description": "Where the box's centre is down the frame. Used when Position is custom.",
+            },
+            "rotation_degrees": {
+                "type": "number",
+                "min": -45.0,
+                "max": 45.0,
+                "default": 0.0,
+                "step": 1.0,
+                "label": "Angle",
+                "unit": "degrees, clockwise",
+                "description": "Tilts the box around its centre.",
             },
             "margin_percent": {
                 "type": "number",
@@ -132,8 +173,30 @@ DEFAULT_TEMPLATE = FULLFRAME
 
 # The tallest a picture-in-picture box may be, as a share of the frame height,
 # so a portrait asset in a portrait frame cannot cover the speaker's face and
-# the caption band at once. Mirrored in frontend/src/broll/layout.ts.
+# the caption band at once. It holds up to a size of 60 (all the planner may
+# choose); a larger manual size raises it in proportion.
+# Mirrored in frontend/src/broll/layout.ts.
 PIP_MAX_HEIGHT_FRACTION = 0.45
+
+
+# Full-frame is only for assets shaped like the video (a phone-screen asset on
+# a phone video): the asset's aspect ratio within this factor of the frame's,
+# either way. 1.25 on a 9:16 frame admits 0.45–0.70 (phone screenshots and
+# recordings); a landscape or square asset goes picture-in-picture instead.
+FULLFRAME_ASPECT_TOLERANCE = 1.25
+
+
+def fits_full_frame(asset_width: Any, asset_height: Any, frame_width: Any, frame_height: Any) -> bool:
+    """Whether an asset fills the frame nicely enough to be shown full-frame."""
+    try:
+        asset = float(asset_width) / float(asset_height)
+        frame = float(frame_width) / float(frame_height)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return False
+    if asset <= 0 or frame <= 0:
+        return False
+    ratio = asset / frame
+    return 1 / FULLFRAME_ASPECT_TOLERANCE <= ratio <= FULLFRAME_ASPECT_TOLERANCE
 
 
 class TemplateError(storage.ProjectError):
@@ -182,14 +245,16 @@ def validate_settings(template_id: Any, raw: Any) -> tuple[dict | None, list[str
 
 
 def resolve_settings(template_id: str, settings: dict, *, caption_position_percent: float) -> dict:
-    """Settings as the renderer receives them: `auto` replaced by a corner.
+    """Settings as the renderer receives them: `auto` made concrete.
 
-    Resolved on the backend, from the caption style, so the preview and the
-    export are handed the same concrete values.
+    Resolved on the backend so the preview and the export are handed the same
+    values. `auto` is `above_captions`; the renderer places that box from the
+    caption layout it is given (see `caption_layout` in the B-roll props).
+    `caption_position_percent` is kept for callers; the side is decided there.
     """
     resolved = dict(settings)
     if template_id == PIP and resolved.get("position") == "auto":
-        resolved["position"] = "top_right" if caption_position_percent >= 50 else "bottom_right"
+        resolved["position"] = "above_captions"
     return resolved
 
 

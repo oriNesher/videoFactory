@@ -50,13 +50,15 @@ from . import broll, broll_library, broll_templates, gemini
 from .config import GEMINI_API_KEY_ENV_VAR, get_zoom_provider_settings
 from .llm import ProviderError
 
-PROMPT_VERSION = "broll-plan-v1"
+PROMPT_VERSION = "broll-plan-v5"  # v2: more B-roll, humour, own assets; v3: bigger PiP above captions; v4: full-frame only for video-shaped assets; v5: a hook is required
 RULES_VERSION = 1
 
 # Editorial hard limits for *planned* placements (manual ones keep 3A's rules).
 MIN_PLANNED_SECONDS = 1.0  # time to recognise the picture
 MAX_PLANNED_SECONDS = 15.0  # no single cutaway hides the speaker for long
 MAX_COVERAGE_FRACTION = 0.5  # the speaker stays on camera at least half the time
+# Every plan opens with a hook: a placement that starts within this many seconds.
+HOOK_SECONDS = 3.0
 MAX_PLANNED_PLACEMENTS = 40
 
 MAX_SUMMARY_CHARACTERS = 600
@@ -136,6 +138,9 @@ def catalog_view(entry: dict) -> dict:
             "orientation": measured["orientation"],
         },
     }
+    if entry.get("library") == broll_library.LIBRARY_PROJECT:
+        # The user put it in this video's own library because they want it in this video.
+        view["added_for_this_video"] = True
     if entry["media_type"] == broll_library.MEDIA_VIDEO:
         view["measured"]["duration_seconds"] = measured.get("duration_seconds")
         if moments:
@@ -227,8 +232,13 @@ def shortlist(candidates: list[dict], transcript_text: str, limit: int = MAX_CAT
             "note": "Every described, available asset was offered.",
         }
     spoken = _tokens(transcript_text)
-    scored = [(len(_tokens(candidate["words"]) & spoken), candidate) for candidate in candidates]
-    scored.sort(key=lambda item: (-item[0], item[1]["order"]))
+    # This video's own assets first, always: the user added them for this video.
+    ranked = [
+        (candidate["view"].get("added_for_this_video", False), len(_tokens(candidate["words"]) & spoken), candidate)
+        for candidate in candidates
+    ]
+    ranked.sort(key=lambda item: (not item[0], -item[1], item[2]["order"]))
+    scored = [(score, candidate) for _own, score, candidate in ranked]
     chosen = [candidate for _score, candidate in scored[:limit]]
     chosen.sort(key=lambda candidate: candidate["order"])
     left_out = [candidate["asset_id"] for _score, candidate in scored[limit:]]
@@ -256,16 +266,28 @@ def template_view() -> list[dict]:
                 "label": template["label"],
                 "description": template["description"],
                 "settings_you_may_set": {
-                    key: {
-                        name: value for name, value in template["settings"][key].items()
-                        if name in ("type", "choices", "min", "max", "default", "description")
-                    }
+                    key: _planner_view_of_setting(key, template["settings"][key])
                     for key in allowed
                 },
                 "fixed": "Asset audio is muted; captions are drawn on top; no transitions (simple cuts).",
             }
         )
     return views
+
+
+def _planner_view_of_setting(key: str, spec: dict) -> dict:
+    """A setting as the planner is told about it: within the planner's own limits."""
+    view = {name: value for name, value in spec.items() if name in ("type", "choices", "min", "max", "default", "description")}
+    if key == "position":
+        view["choices"] = list(broll_templates.PIP_PLANNER_POSITIONS)
+        view["description"] = (
+            "auto (recommended) or above_captions: centred across the frame, just above the captions. "
+            "A corner only when the centre would hide something the speaker is showing."
+        )
+    if key == "size_percent":
+        view["min"], view["max"] = broll_templates.PIP_PLANNER_MIN_SIZE, broll_templates.PIP_PLANNER_MAX_SIZE
+        view["description"] = "The box's width as % of the frame width. Big is good: the asset should be easy to see."
+    return view
 
 
 # --- the request ----------------------------------------------------------------------
@@ -286,8 +308,8 @@ def response_schema(asset_ids: list[str]) -> dict:
             "summary": {
                 "type": "string",
                 "description": (
-                    "One to three sentences in English: what B-roll was added and why, or honestly why "
-                    "none was added."
+                    "One to three sentences in English: what B-roll was added and why, starting with the "
+                    "hook; mention any of this video's own assets that were left out, and why."
                 ),
             },
             "placements": {
@@ -304,7 +326,7 @@ def response_schema(asset_ids: list[str]) -> dict:
                             "type": "object",
                             "properties": {
                                 "fit": {"type": "string", "enum": ["contain", "cover"]},
-                                "position": {"type": "string", "enum": list(broll_templates.PIP_POSITIONS)},
+                                "position": {"type": "string", "enum": list(broll_templates.PIP_PLANNER_POSITIONS)},
                                 "size_percent": {"type": "number"},
                             },
                         },
@@ -338,6 +360,7 @@ def rules() -> dict:
         "max_seconds": MAX_PLANNED_SECONDS,
         "max_total_fraction": MAX_COVERAGE_FRACTION,
         "max_placements": MAX_PLANNED_PLACEMENTS,
+        "hook": "Required: at least one placement starts before %.1f s (the opening hook)." % HOOK_SECONDS,
         "bounds": "0 <= start < end <= video duration_seconds",
         "overlap": "At most one B-roll on screen at a time; back-to-back (end == next start) is allowed.",
         "frames": "Times are rounded to the nearest frame of the video.",
@@ -389,9 +412,20 @@ def build_request(
         "assets_note": (
             "Only described assets are listed. described_by_user and described_moments are the user's own "
             "words about what an asset shows; measured fields come from the file and say nothing about "
-            "content. Never assume more than the user's words say."
+            "content. Never assume more than the user's words say. added_for_this_video: the user put "
+            "this asset in this video's own library because they want it in this video; the others come "
+            "from a general library shared by all videos and are optional."
         ),
-        "assets": [candidate["view"] for candidate in offered],
+        "assets": [
+            {
+                **candidate["view"],
+                # Only an asset shaped like the video may be shown full-frame.
+                "fits_full_frame": broll_templates.fits_full_frame(
+                    candidate["view"]["measured"]["width"], candidate["view"]["measured"]["height"], width, height
+                ),
+            }
+            for candidate in offered
+        ],
         "templates": template_view(),
         "rules": rules(),
         "editorial_preference": broll.PLANNER_PREFERENCES[preference],
@@ -451,27 +485,38 @@ source_start (its in-point), following that asset's source_rule.
 underneath every placement.
 
 Editorial guidance:
-- Add B-roll only where an asset clearly shows or clarifies a specific idea \
-being said at that moment. Prefer no placement over an irrelevant or merely \
-decorative one. An empty placements list with an honest summary is a good \
-answer when nothing fits.
-- Keep the speaker on camera for substantial stretches, especially for the \
-opening hook, personal statements and the call to action. Avoid constant \
-overlays, regular intervals, and reusing the same asset repeatedly.
+- This is fast short-form video: B-roll keeps viewers watching, so use it \
+often. Place an asset wherever it relates to what is being said, either by \
+showing it or by reacting to it. Leave an asset out only when it clearly has \
+nothing to do with the speech. A plan is never empty: it always has at \
+least the hook.
+- Every asset marked added_for_this_video must be placed at least once, at \
+the moment where it fits best, unless it truly relates to nothing in the \
+speech (then say so in the summary). General-library assets are optional.
+- Open with a hook: one placement must start within the first \
+%g seconds, using the most attention-grabbing asset that relates to \
+the opening words (a striking or funny one is ideal). This is required.
+- Keep the speaker on camera for the call to action. Elsewhere frequent \
+B-roll is welcome; vary the rhythm rather than placing at regular \
+intervals, and reuse an asset only when it is the subject.
 - Give viewers time to understand each visual: usually two to six seconds, \
 never shorter than the minimum. Start and end on phrase boundaries where you \
 can.
 - picture-in-picture (pip) keeps the speaker visible; full-frame (fullframe) \
-replaces the picture, best for screen recordings or images that must be read.
+replaces the picture. Use fullframe only for an asset with fits_full_frame: \
+true (shaped like the video); every other asset is pip.
 - A loosely related asset does not prove the speaker's factual claim; do not \
-use an asset as if it were evidence. No jokes, memes or humorous readings.
+present it as evidence.
+- Humour is welcome. Memes and funny visuals may react to a line, exaggerate \
+it or play on it, as long as the joke connects to what is said at that \
+moment. Nothing hateful or demeaning toward people.
 - If a visual that would clearly help is missing from the catalog, you may \
 mention it in missing_asset_suggestions (optional, at most five). These are \
 only notes for the user.
 
 Write summary, rationale and suggestions in English; quote the transcript in \
 its own language in spoken_text. Respond only with JSON matching the \
-response schema."""
+response schema.""".replace("%g seconds", "%g seconds" % HOOK_SECONDS)
 
 
 # --- validation -----------------------------------------------------------------------
@@ -568,6 +613,14 @@ def validate_answer(
         if not isinstance(settings, dict):
             errors.append("%s: settings must be an object." % label)
             continue
+        measured = snapshot["view"]["measured"]
+        if template_id == broll_templates.FULLFRAME and not broll_templates.fits_full_frame(
+            measured["width"], measured["height"], base["width"], base["height"]
+        ):
+            # Not the video's shape: shown as picture-in-picture instead (the
+            # planner's fit setting belongs to full-frame and is dropped).
+            notes.append("%s: not shaped like the video, so picture-in-picture instead of full-frame." % label)
+            template_id, settings = broll_templates.PIP, {}
         not_allowed = sorted(set(settings) - set(PLANNER_SETTINGS[template_id]))
         if not_allowed:
             errors.append(
@@ -575,6 +628,20 @@ def validate_answer(
                 % (label, ", ".join(not_allowed), template_id, ", ".join(PLANNER_SETTINGS[template_id]) or "none")
             )
             continue
+        if template_id == broll_templates.PIP:
+            if settings.get("position", "auto") not in broll_templates.PIP_PLANNER_POSITIONS:
+                errors.append(
+                    "%s: position must be one of: %s."
+                    % (label, ", ".join(broll_templates.PIP_PLANNER_POSITIONS))
+                )
+                continue
+            size = settings.get("size_percent")
+            if _finite(size) and not broll_templates.PIP_PLANNER_MIN_SIZE <= size <= broll_templates.PIP_PLANNER_MAX_SIZE:
+                errors.append(
+                    "%s: size_percent must be between %g and %g."
+                    % (label, broll_templates.PIP_PLANNER_MIN_SIZE, broll_templates.PIP_PLANNER_MAX_SIZE)
+                )
+                continue
         rationale = _text(item.get("rationale"), MAX_RATIONALE_CHARACTERS)
         if not rationale:
             errors.append("%s needs a rationale linking it to what is said." % label)
@@ -667,6 +734,14 @@ def validate_answer(
 
     if errors:
         return None, errors
+
+    if not any(placement["start"] < HOOK_SECONDS for placement in candidates):
+        earliest = min((placement["start"] for placement in candidates), default=None)
+        return None, [
+            "The plan has no hook: one placement must start within the first %.1f s of the video (%s). "
+            "Add one with the most attention-grabbing asset that relates to the opening words."
+            % (HOOK_SECONDS, "it has no placements" if earliest is None else "the earliest starts at %.2f s" % earliest)
+        ]
 
     covered = sum(placement["end"] - placement["start"] for placement in candidates)
     if covered > MAX_COVERAGE_FRACTION * duration + 1e-6:
@@ -797,11 +872,27 @@ class MockBrollPlanner:
                 cursor = segment["start"] + length
                 budget -= length
                 break
+        # The required hook: the first offered asset at the very start, unless
+        # something already starts in time (it never overlaps the next one).
+        if not any(item["start"] < HOOK_SECONDS for item in placements) and request["assets"]:
+            asset = request["assets"][0]
+            room = min([duration, *(item["start"] for item in placements)])
+            length = min(2.5, room)
+            if asset["media_type"] == "video":
+                length = min(length, asset["measured"]["duration_seconds"] or 0.0)
+            if length >= MIN_PLANNED_SECONDS:
+                hook = {
+                    "asset_id": asset["asset_id"], "template_id": "pip", "start": 0.0, "end": length,
+                    "rationale": "Demo rule: the required opening hook.",
+                }
+                if asset["media_type"] == "video":
+                    hook["source_start"] = (asset.get("described_moments") or [{"source_start": 0.0}])[0]["source_start"]
+                placements.insert(0, hook)
         return {
             "data": {
                 "summary": (
-                    "Demo rules, not AI: an asset is shown where its description shares words with the speech."
-                    if placements else "Demo rules, not AI: no asset description shares words with the speech."
+                    "Demo rules, not AI: an opening hook, then assets where their description shares words with the speech."
+                    if placements else "Demo rules, not AI: no asset could be placed."
                 ),
                 "placements": placements,
             },

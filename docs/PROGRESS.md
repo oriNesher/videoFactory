@@ -1762,6 +1762,145 @@ is [REAL_WORLD_TRIAL.md](REAL_WORLD_TRIAL.md).
   summaries include `samples` (the preview requests). Checked with `tsc -b`,
   lint and `pytest test_boundaries.py -k "state or sample or cancel"`
   (6 passed).
+- Cutting slide decluttered:
+  - The mode cards show only their titles. Details are in an ⓘ tooltip.
+  - The explanation paragraph is removed.
+  - Join previews are removed. **Render all previews** renders openings and
+    endings only.
+  - Boundary detection starts by itself when it is needed (once per settings
+    and clip list).
+- The preview panel has a **VLC** button. It uses the new
+  `POST /projects/{id}/captions/inputs/{key}/open` endpoint, which shares
+  `player.open_file` with the footage button. Checked with `tsc -b`, lint, a
+  new test in `test_projects.py`, and `test_boundaries.py` plus
+  `test_pipeline.py` (98 passed).
+- The boundary setting labels are shortened to Threshold, Before start, After
+  end and Ignore (in `boundaries.py`, and in the README).
+- The Captions slide always uses the accepted cut's merged video and
+  transcribes it by itself with the default settings. It has no engine or
+  video options. A compact text-only correction table
+  (`CaptionTextTable.tsx`) sits beside its player. Style, grouping and the
+  separate export are collapsed.
+- The stage carousel locks stages past the first one that isn't done. The
+  side preview is hidden on the Captions slide.
+- Checked with `tsc -b`, lint and `npm test`.
+- Captions, second pass:
+  - The slide uses the shared side preview through `previewBridge.ts`
+    (unsaved draft override, seek, frame), and `CaptionPreview.tsx` is
+    removed.
+  - Stage Accept bars and caption actions are at the top of the slide.
+  - Default words per caption is 2.
+  - Style and grouping are always open.
+  - The text table scrolls in a box as tall as the preview, with ↑/↓ row
+    navigation.
+  - Checked with `tsc -b`, lint, `npm test` and `test_captions.py`
+    (61 passed).
+- The B-roll slide has **This video's assets** and **General library**
+  buttons. Each opens a library window (`LibraryWindow.tsx`) with import at
+  the top and an editable description on every asset. This replaces the
+  collapsible library section. Checked with `tsc -b`, lint and `npm test`.
+- The B-roll slide uses the shared preview (its own player is removed).
+  `BrollTimelineTable.tsx` is a read-only table of captions with three B-roll
+  layer columns, where each placement is a rectangle whose height is its time
+  on screen. Checked with `tsc -b`, lint and `npm test`.
+- The library window uses a compact asset editor: one-line fields, short
+  titles, and no explanatory text.
+- Picture-in-picture has three new manual settings: a custom position
+  (`x_percent` / `y_percent`), `rotation_degrees` (±45°), and a size range of
+  10–90. The 45% height limit grows above size 60. The planner stays limited
+  to auto or corners and sizes 20–60. Checked with `npm test` (16),
+  `test_broll_planner.py`, and `test_broll.py` (updated for the new range and
+  defaults).
+- B-roll planner prompt v2: more B-roll, humour allowed, and assets in the
+  video's own library are marked `added_for_this_video` and must be used.
+  They are always shortlisted. The default preference is Balanced. Checked
+  with `test_broll_planner.py` (49 plus 1 new).
+- Picture-in-picture `auto` is now `above_captions`: centred, just above the
+  caption line, placed from the new `caption_layout` props. The default size
+  is 70 and the planner uses 40–80. There is no border, shadow or radius.
+  Prompt version `broll-plan-v3`.
+- Full-frame only for video-shaped assets (`fits_full_frame`, aspect within
+  ×1.25 of the frame). The planner converts others to PiP (prompt v4), the
+  validator refuses them by hand, and the pickers disable it. The B-roll test
+  image is now 9:16. Checked with the B-roll, planner and pipeline tests
+  (91 plus 3 new), `npm test` and `tsc -b`.
+- Every automatic B-roll plan must have a hook: a placement starting before
+  `HOOK_SECONDS` = 3.0. The prompt requires it (v5), and the validator
+  rejects a plan without one (one repair, then fail). An empty automatic plan
+  is no longer valid, but manual "no B-roll" and Skip remain. Checked with
+  `test_broll_planner.py` (53).
+
+## Stage 4 — background music
+
+Status: music complete. Sound effects will be added to this stage later.
+
+### What was built
+
+A sixth stage, **Music**, after B-roll. Approving or skipping B-roll now
+continues here instead of exporting; approving the music (or continuing
+without it) runs the final export.
+
+**Backend:**
+
+| File | Role |
+| --- | --- |
+| `audio_library.py` | New. The shared audio library (`workspace/library/audio/`): import by path or file dialog, FFprobe measurement, derived status (available / missing / changed), rename, re-measure, remove, serving. Entries carry `kind` ("music"; "sfx" later) |
+| `music.py` | New. Settings, the composition on top of the B-roll decision, review state and the approve / skip decision |
+| `music_jobs.py` | New. The `music_export` job: freezes the decided result and renders it to `exports/final/` |
+| `api_music.py` | New. `/audio/library/...` and `/projects/{id}/music/...` |
+| `broll_jobs.py` | The render body became `render_export(...)`, shared by the B-roll export and the final export; an optional music track is fingerprinted and passed to the renderer |
+| `pipeline.py` | The `music` stage; the preview uses the music composition once B-roll is decided |
+| `api_broll.py`, `api_zooms.py` | Hand over to music when it is on (B-roll's decision; zoom approval with B-roll off) |
+| `folders.py` | The audio file dialog |
+
+**Frontend:** `MusicPanel.tsx` (library, mix, review, export),
+`music/MusicLayer.tsx` (an `Audio` layer in the composition),
+`music/volume.ts` (fade and loop timing, unit-tested), the stage in
+`StageCarousel.tsx`, and the music URL in `VideoPreview.tsx`. The render
+script serves the snapshot's track and bundles `src/music`.
+
+### Decisions
+
+- **Music is a composition layer, not an FFmpeg mix.** The preview beside the
+  stage and the export are the same Remotion composition, as for captions and
+  B-roll, so what is heard while choosing is what is rendered.
+- **It builds on the B-roll decision, not on B-roll's plan.** Skipped (or
+  switched-off) B-roll leaves no placements in the music composition; the
+  stage refuses to decide while B-roll is undecided.
+- **One digest names everything.** The decision covers the props (including
+  every setting), the base video, the B-roll decision, the captions and the
+  track's fingerprint. Any change reopens the stage, with a specific reason.
+- **One final export.** The music stage's export renders whatever was decided
+  (B-roll, captions, music or not). If nothing is added at all, the base video
+  is the result and nothing is rendered.
+- **Switchable, like B-roll.** With the stage off, B-roll's approve / skip
+  export exactly as before; the existing B-roll and zoom tests run with it off
+  for that reason.
+- **Fades by frame.** Volume is a function of the composition frame
+  (`loopVolumeCurveBehavior="extend"`), so the fade-out lands on the video's
+  end even when the track loops.
+
+### Checks performed
+
+- `pytest backend\tests` → **529 passed** (520 before, plus 9 new). New: `test_music.py` (9 tests: library,
+  settings, hand-over, review and outdating, nothing-to-add, switching off,
+  and one real Remotion export checked by its audio: present, faded in,
+  looping past the track's end, faded out, the speaker's 880 Hz tone at its
+  original level). `test_pipeline.py` now covers the sixth stage and the
+  music in the preview.
+- `npm.cmd test` → 23 passed (6 new in `tests/music.test.ts`).
+- `npm.cmd run build` → succeeded. `npm.cmd run lint` → one new
+  `set-state-in-effect` warning, the same mount-time fetch pattern as every
+  other panel.
+
+**Not verified here:** the panel in a browser, and how the mix sounds on a
+real voice with real music. Choose the volume by ear.
+
+### Known limitations
+
+- No ducking under speech; one level for the whole video.
+- One track per video, from the first frame.
+- Loops restart at the start point with a hard join.
 
 ## Roadmap
 
@@ -1773,5 +1912,5 @@ is [REAL_WORLD_TRIAL.md](REAL_WORLD_TRIAL.md).
 | 2B | Automatic zooms (Gemini plan, FFmpeg render), review and approval | Done |
 | **3A** | **B-roll foundation, not a manual editor:** a local asset library, a versioned and validated placement plan on the edited timeline, two templates (full-frame, picture-in-picture), composition with zooms and captions, review, approval and export. Manual placement is limited to one "add at playhead" action plus remove and small adjustments — enough to produce and review real results. | Done |
 | **3B** | **AI-driven B-roll selection and timing:** Gemini chooses described assets, times, in-points and templates from the transcript; validated, saved as a plan revision, composed and reviewed as a result; starts on its own after zoom approval. | Done |
-| **4** | **Background music and sound effects** (next): music bed and SFX chosen and mixed under the speaker, reviewed like B-roll. | Next |
+| **4** | **Background music and sound effects:** a music bed chosen from a local library and mixed under the speaker, reviewed like B-roll, then the final export. Sound effects join the same stage next. | Music done; SFX next |
 | Later | Final export / OBS | Not started |

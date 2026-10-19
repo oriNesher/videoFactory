@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { acceptStage, getPipeline } from './api'
 import type { PipelineStage, PipelineState, StageId } from './types'
+import { createPreviewBridge, PreviewBridgeContext, type PreviewOverride } from './previewBridge'
 import VideoPreview from './VideoPreview'
 
 /**
@@ -8,7 +9,7 @@ import VideoPreview from './VideoPreview'
  * video being made beside every slide.
  *
  * A stage is done only when the user accepted it — here for footage, cutting
- * and captions, in their own section for zooms and B-roll. Accepting moves to
+ * and captions, in their own section for zooms, B-roll and music. Accepting moves to
  * the next slide by itself; any slide can still be opened from the bar.
  *
  * Every slide stays mounted (hidden when not shown), so a stage's drafts,
@@ -17,7 +18,7 @@ import VideoPreview from './VideoPreview'
 
 const POLL_MS = 4000
 
-const ORDER: StageId[] = ['footage', 'cutting', 'captions', 'zooms', 'broll']
+const ORDER: StageId[] = ['footage', 'cutting', 'captions', 'zooms', 'broll', 'music']
 
 type Props = {
   projectId: string
@@ -26,6 +27,14 @@ type Props = {
   refreshSignal: number
   /** Why the footage cannot be accepted right now (unsaved edits), if so. */
   footageHold?: string | null
+}
+
+/**
+ * How far the user may go: up to the first stage that is not done. A later
+ * stage cannot be opened before the ones before it have done their work.
+ */
+function reachableIndex(pipeline: PipelineState): number {
+  return pipeline.current_stage === null ? ORDER.length - 1 : ORDER.indexOf(pipeline.current_stage)
 }
 
 function stageClass(stage: PipelineStage, active: boolean): string {
@@ -41,6 +50,8 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
   const [active, setActive] = useState<StageId | null>(null)
   const [error, setError] = useState('')
   const [accepting, setAccepting] = useState(false)
+  const [override, setOverride] = useState<PreviewOverride | null>(null)
+  const [bridge] = useState(() => createPreviewBridge(setOverride))
 
   // What was done at the last answer, to notice a stage becoming done.
   const doneBefore = useRef<Record<string, boolean> | null>(null)
@@ -56,7 +67,13 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
     doneBefore.current = Object.fromEntries(next.stages.map((stage) => [stage.id, stage.done]))
     if (previous === null) {
       // First answer: open where the work is.
-      setActive(next.current_stage ?? 'broll')
+      setActive(next.current_stage ?? ORDER[ORDER.length - 1])
+      return
+    }
+    // An upstream change reopened an earlier stage: go back to it.
+    const reachable = reachableIndex(next)
+    if (activeRef.current && ORDER.indexOf(activeRef.current) > reachable) {
+      setActive(ORDER[reachable])
       return
     }
     // Automatic continuation: the slide on screen was just accepted.
@@ -102,6 +119,7 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
   const shown = active ?? 'footage'
   const index = ORDER.indexOf(shown)
   const current = stages.find((stage) => stage.id === shown)
+  const reachable = pipeline ? reachableIndex(pipeline) : 0
 
   return (
     <div className="stage-shell">
@@ -115,7 +133,12 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
                   type="button"
                   className={stage ? stageClass(stage, id === shown) : 'stage-step'}
                   aria-current={id === shown ? 'step' : undefined}
-                  title={stage?.outdated_reason ?? stage?.summary}
+                  title={
+                    position > reachable
+                      ? 'Finish the stages before this one first'
+                      : (stage?.outdated_reason ?? stage?.summary)
+                  }
+                  disabled={position > reachable}
                   onClick={() => setActive(id)}
                 >
                   <span className="stage-dot" aria-hidden="true">
@@ -138,6 +161,7 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
 
       {error && <p className="message error">{error}</p>}
 
+      <PreviewBridgeContext.Provider value={bridge}>
       <div className="stage-body">
         <div className="stage-carousel">
           <div className="stage-nav">
@@ -149,18 +173,13 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
             </h3>
             <button
               type="button"
-              disabled={index >= ORDER.length - 1}
+              disabled={index >= ORDER.length - 1 || index + 1 > reachable}
+              title={index + 1 > reachable ? 'Accept this stage first' : undefined}
               onClick={() => setActive(ORDER[index + 1])}
             >
               {index < ORDER.length - 1 ? stages.find((stage) => stage.id === ORDER[index + 1])?.label : ''} ›
             </button>
           </div>
-
-          {ORDER.map((id) => (
-            <section key={id} className="stage-slide" hidden={id !== shown}>
-              {slides[id]}
-            </section>
-          ))}
 
           {current && (
             <StageFooter
@@ -170,10 +189,24 @@ export default function StageCarousel({ projectId, slides, refreshSignal, footag
               onAccept={() => void accept(current)}
             />
           )}
+
+          {ORDER.map((id) => (
+            <section key={id} className="stage-slide" hidden={id !== shown}>
+              {slides[id]}
+            </section>
+          ))}
+
         </div>
 
-        <VideoPreview projectId={projectId} preview={pipeline?.preview ?? null} stages={stages} />
+        <VideoPreview
+          projectId={projectId}
+          preview={pipeline?.preview ?? null}
+          stages={stages}
+          override={override}
+          bridge={bridge}
+        />
       </div>
+      </PreviewBridgeContext.Provider>
     </div>
   )
 }
@@ -190,7 +223,7 @@ function StageFooter({
   onAccept: () => void
 }) {
   return (
-    <footer className={stage.done ? 'stage-footer done' : 'stage-footer'}>
+    <div className={stage.done ? 'stage-footer stage-actions done' : 'stage-footer stage-actions'}>
       {stage.done && (
         <p className="message ok">
           <strong>Accepted.</strong> {stage.summary}
@@ -220,6 +253,6 @@ function StageFooter({
           </p>
         )
       )}
-    </footer>
+    </div>
   )
 }

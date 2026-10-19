@@ -13,24 +13,28 @@
  *      file by FFmpeg beforehand, so nothing here zooms anything);
  *   2. B-roll (stage 3A), when the props carry any: ../broll/BrollLayer.tsx;
  *   3. the caption layer, always on top.
+ * Background music (stage 4) draws nothing: ../music/MusicLayer.tsx.
  *
  * Audio: the video element's own track is the composition's audio, present
  * exactly once; it keeps playing under every B-roll placement. B-roll assets
- * are muted unless a placement turns its asset's sound on.
+ * are muted unless a placement turns its asset's sound on. Music, when the
+ * props carry it, is mixed under the speaker at its own volume.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import { AbsoluteFill, continueRender, delayRender, useCurrentFrame, useVideoConfig } from 'remotion'
 import { Video } from '@remotion/media'
 import { BrollLayer } from '../broll/BrollLayer'
+import { MusicLayer } from '../music/MusicLayer'
 import { fontFamily, loadCaptionFont } from './fonts'
 import { activeIndex, captionFrameRanges, frameToSeconds } from './timing'
 import type { Caption, CaptionStyle, CaptionedVideoProps } from './types'
 
-export function CaptionedVideo({ video, captions, style, direction, broll }: CaptionedVideoProps) {
+export function CaptionedVideo({ video, captions, style, direction, broll, music }: CaptionedVideoProps) {
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
       <Video src={video.src} objectFit="contain" />
+      {music && <MusicLayer music={music} />}
       {broll && broll.placements.length > 0 && <BrollLayer broll={broll} />}
       <CaptionLayer captions={captions} style={style} direction={direction} />
     </AbsoluteFill>

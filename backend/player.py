@@ -30,7 +30,11 @@ def open_source(project_id: str, source_id: str) -> None:
     if source is None:
         raise storage.ProjectError("That file is not in this video.", 404)
 
-    path = source["path"]
+    open_file(source["path"])
+
+
+def open_file(path: str) -> None:
+    """Open a file the backend resolved itself (never a path from a request)."""
     if not os.path.isfile(path):
         raise storage.ProjectError("File not found: %s" % path, 404)
 
@@ -58,3 +62,18 @@ def launch(command: list[str]) -> None:
 def open_folder(path: str) -> None:
     """Show a folder in the system file manager (Explorer on Windows)."""
     os.startfile(path)  # noqa: S606 - a directory this app wrote, never user input
+
+
+def reveal_file(path: str) -> None:
+    """Open Explorer on the file's folder with the file selected.
+
+    Explorer parses its own command line: `/select,"<path>"` must reach it as
+    written, so the line is passed as one string. Windows paths cannot
+    contain a double quote, and the path is one this app resolved itself.
+    """
+    if not os.path.isfile(path):
+        raise storage.ProjectError("File not found: %s" % path, 404)
+    try:
+        subprocess.Popen('explorer /select,"%s"' % os.path.normpath(path), close_fds=True)  # noqa: S602
+    except OSError as error:
+        raise storage.ProjectError("Explorer could not be started: %s" % error) from error

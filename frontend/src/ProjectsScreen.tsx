@@ -11,6 +11,7 @@ import BrollPanel from './BrollPanel'
 import CaptionsPanel from './CaptionsPanel'
 import CuttingPanel from './CuttingPanel'
 import JobsPanel from './JobsPanel'
+import MusicPanel from './MusicPanel'
 import StageCarousel from './StageCarousel'
 import ZoomsPanel from './ZoomsPanel'
 import type { Project, ProjectListing, SourceMedia } from './types'
@@ -499,6 +500,13 @@ export default function ProjectsScreen() {
                     key={`broll-${project.id}`}
                     project={project}
                     onJobSubmitted={() => setJobsRefresh((value) => value + 1)}
+                  />
+                ),
+                music: (
+                  <MusicPanel
+                    key={`music-${project.id}`}
+                    project={project}
+                    onChanged={() => setJobsRefresh((value) => value + 1)}
                   />
                 ),
               }}

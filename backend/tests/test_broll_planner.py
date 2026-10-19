@@ -31,6 +31,7 @@ import pytest
 from backend import (
     broll,
     broll_library,
+    broll_templates,
     broll_planner,
     broll_planner_jobs,
     caption_jobs,
@@ -172,7 +173,7 @@ def plan_and_wait(client, s, **body):
 
 
 def test_only_described_available_assets_are_offered_without_paths_or_names(client, setup, fake):
-    fake.answers = [answer(summary="No match.")]
+    fake.answers = [answer(image_at(setup["image"], 0.6, 1.6))]
     record = plan_and_wait(client, setup)
     assert record["status"] == "succeeded", record["error"]
     (request,) = fake.requests()
@@ -261,7 +262,10 @@ def checker(setup, client):
         (lambda s: answer({**image_at(s["image"], 1, 3), "template_id": "kenburns"}), "uses template"),
         (lambda s: answer(image_at(s["image"], 1, 3, settings={"muted": False})), "cannot be set"),
         (lambda s: answer(image_at(s["image"], 1, 3, settings={"position": "top_left"})), "cannot be set"),
-        (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"size_percent": 90})), "between 20 and 60"),
+        (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"size_percent": 90})), "between 40 and 80"),
+        # A free position and the angle are manual corrections, never the planner's.
+        (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"position": "custom"})), "position must be one of"),
+        (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"x_percent": 10})), "cannot be set"),
         (lambda s: answer(image_at(s["image"], float("nan"), 3)), "finite"),
         (lambda s: answer(image_at(s["image"], "1", 3)), "finite"),
         (lambda s: answer(image_at(s["image"], -0.5, 1)), "starts before 0"),
@@ -319,9 +323,13 @@ def test_valid_answers_are_quantised_to_frames_and_kept_otherwise(setup, checker
     assert plan["statistics"]["placement_count"] == 2
 
 
-def test_an_empty_plan_is_valid(checker):
+def test_every_plan_needs_a_hook(setup, checker):
     plan, errors = checker(answer(summary="Nothing in the library matches this talk about holidays."))
-    assert errors == [] and plan["placements"] == [] and "holidays" in plan["summary"]
+    assert plan is None and any("no hook" in error and "no placements" in error for error in errors), errors
+    plan, errors = checker(answer(image_at(setup["image"], 3.0, 4.5)))
+    assert plan is None and any("no hook" in error and "3.00 s" in error for error in errors), errors
+    plan, errors = checker(answer(image_at(setup["image"], 2.9, 4.0)))
+    assert errors == [] and plan["placements"][0]["start"] < broll_planner.HOOK_SECONDS
 
 
 # --- the job: planning, provider failures, reuse ------------------------------------------
@@ -343,7 +351,7 @@ def test_a_valid_plan_becomes_a_reviewable_revision_with_its_reasons(client, set
     assert run["summary"] == "Two visuals that match the speech." and run["suggestions"][0]["description"] == "A shot of the office"
     assert set(run["explanations"]) == {p["id"] for p in plan["placements"]}
     assert run["provider"]["model"] == DEFAULT_GEMINI_MODEL and run["prompt_version"] == broll_planner.PROMPT_VERSION
-    assert run["preferences"] == {"preference": "restrained", "caption_band": "bottom"}
+    assert run["preferences"] == {"preference": "balanced", "caption_band": "bottom"}
     stored = client.get(f"/projects/{setup['project']}/broll/planner/runs/{run['run_id']}").json()
     assert stored["base"]["digest"] == plan["base"]["digest"] and stored["transcript"]["revision"] == 1
     assert stored["catalog"]["asset_digests"].keys() == {setup["image"], setup["clip"]}
@@ -423,7 +431,7 @@ def test_provider_failures_are_errors_with_bounded_retries_never_an_empty_plan(c
     assert state["plan"] is None and state["planner"]["last_job"]["status"] == "failed"
     # Retry re-runs the same snapshot; this time it works.
     fake.calls.clear()
-    fake.answers = [answer(summary="Nothing fits.")]
+    fake.answers = [answer(image_at(setup["image"], 0.6, 1.6))]
     retried = client.post(f"/projects/{setup['project']}/jobs/{record['id']}/retry").json()
     assert wait_for_job(client, setup["project"], retried["id"])["status"] == "succeeded" and len(fake.calls) == 1
 
@@ -467,7 +475,7 @@ def test_manual_corrections_are_kept_and_a_new_plan_never_overwrites_silently(cl
 
     refused = start(client, setup, force_replan=True)
     assert refused.status_code == 409 and state_of(client, pid, key)["plan"]["revision"] == 2
-    fake.answers = [answer(image_at(setup["image"], 4.0, 5.5))]
+    fake.answers = [answer(image_at(setup["image"], 1.0, 2.5))]
     record = plan_and_wait(client, setup, force_replan=True, replace_current=True)
     assert record["status"] == "succeeded" and record["result"]["applied_revision"] == 3
     history = state_of(client, pid, key)["revisions"]
@@ -515,28 +523,19 @@ def test_approval_names_the_exact_revision_and_unrelated_assets_do_not_outdate_i
     import_asset(client, make_image(media_dir / "unrelated.png", colour="green"))
     assert state_of(client, pid, key)["review"]["approved"]  # an unrelated asset changes nothing
 
-    fake.answers = [answer(image_at(setup["image"], 3.0, 4.2))]
+    fake.answers = [answer(image_at(setup["image"], 1.0, 2.2))]
     plan_and_wait(client, setup, force_replan=True, replace_current=True)
     state = state_of(client, pid, key)
     assert not state["review"]["approved"] and "plan changed" in state["review"]["outdated_reason"]
 
 
-def test_a_valid_no_broll_result_explains_itself_and_can_be_approved(client, setup, fake, monkeypatch):
-    monkeypatch.setattr(caption_jobs, "renderer_status", lambda: {"ready": False, "problems": ["not prepared"]})
+def test_a_plan_without_a_hook_is_sent_back_once_and_then_fails(client, setup, fake):
     fake.answers = [answer(summary="The talk is a greeting; no described asset illustrates it.")]
     record = plan_and_wait(client, setup)
-    assert record["status"] == "succeeded" and record["result"]["placement_count"] == 0
-    state = state_of(client, setup["project"], setup["key"])
-    assert state["plan"]["placements"] == [] and "greeting" in state["planner"]["run"]["summary"]
-    assert state["review"]["can_approve"] and state["props"]["broll"]["placements"] == []
-    response = client.post(f"/projects/{setup['project']}/broll/inputs/{setup['key']}/approve",
-                           json={"composition_digest": state["composition_digest"]})
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["decision"]["decision"] == "approved" and body["decision"]["placement_count"] == 0
-    # It continues like a skip: to the captions export (blocked here: no renderer) — never a B-roll export.
-    assert body["next"]["kind"] in ("caption_export", "blocked")
-    assert state_of(client, setup["project"], setup["key"])["review"]["approved"]
+    assert record["status"] == "failed" and "no hook" in record["error"], record
+    assert len(fake.calls) == 2  # the answer and one repair request naming the problem
+    assert "no hook" in fake.calls[1]["message"]
+    assert state_of(client, setup["project"], setup["key"])["plan"] is None
 
 
 def test_approving_zooms_continues_into_planning_on_the_zoomed_video(client, setup, fake, fake_whisper, planner):
@@ -575,7 +574,9 @@ def test_a_planned_composition_renders_at_the_planned_times(client, setup, fake,
     ceil(0.59 × 25) = 15, stored as 0.6; frames 15–39) and the clip picture-in-picture at 2.0–3.2 s from its described
     0.5 s moment (lime, frames 50–79), whose own 300 Hz tone must stay muted.
     """
-    fake.answers = [answer(image_at(setup["image"], 0.59, 1.6), clip_at(setup["clip"], 2.0, 3.2, source_start=0.5))]
+    # The PiP is asked for top right at 40 % (the pixel checks below).
+    fake.answers = [answer(image_at(setup["image"], 0.59, 1.6), clip_at(
+        setup["clip"], 2.0, 3.2, source_start=0.5, settings={"position": "top_right", "size_percent": 40}))]
     assert plan_and_wait(client, setup)["status"] == "succeeded"
     pid, key = setup["project"], setup["key"]
     state = state_of(client, pid, key)
@@ -599,14 +600,15 @@ def test_a_planned_composition_renders_at_the_planned_times(client, setup, fake,
     assert float(probe["format"]["duration"]) == pytest.approx(6.0, abs=0.1)
 
     def red_rows(frame):
-        return sum(1 for y in range(640) if frame[y, 180, 0] > 200 and frame[y, 180, 1] < 60 and frame[y, 180, 2] < 60)
+        # The top 300 rows only: the caption scrim darkens the lower part of a full-frame image.
+        return sum(1 for y in range(300) if frame[y, 180, 0] > 200 and frame[y, 180, 1] < 60 and frame[y, 180, 2] < 60)
 
     def lime(pixel):
         return pixel[1] > 200 and pixel[0] < 80 and pixel[2] < 80
 
     assert red_rows(_frame(exported, 14)) < 50 and _frame(exported, 14)[:180].max() > 60  # the speaker
     for index in (15, 27, 39):
-        assert abs(red_rows(_frame(exported, index)) - 202.5) <= 3, index  # letterboxed image
+        assert red_rows(_frame(exported, index)) >= 297, index  # the 9:16 image fills the frame
     assert red_rows(_frame(exported, 40)) < 50
     for index in (50, 65, 79):
         assert lime(_frame(exported, index)[68, 274]), index  # PiP top right, from the 0.5 s moment
@@ -627,3 +629,64 @@ def test_a_planned_composition_renders_at_the_planned_times(client, setup, fake,
         subprocess.run(["ffmpeg.exe", "-hide_banner", "-loglevel", "error", "-y", "-i", str(exported), "-vf",
                         "select=eq(n\\,%d)" % index, "-frames:v", "1", str(target / ("planned-%03d.png" % index))], check=True)
     assert base_file.is_file()
+
+
+def test_manual_picture_in_picture_settings_take_a_free_position_and_an_angle():
+    settings, errors = broll_templates.validate_settings(
+        "pip", {"position": "custom", "x_percent": 25, "y_percent": 70, "rotation_degrees": -12, "size_percent": 75}
+    )
+    assert errors == [] and settings["position"] == "custom" and settings["rotation_degrees"] == -12.0
+    # A plan saved before these settings existed gets their defaults.
+    old, errors = broll_templates.validate_settings("pip", {"position": "top_right", "size_percent": 40})
+    assert errors == [] and (old["x_percent"], old["y_percent"], old["rotation_degrees"]) == (50.0, 30.0, 0.0)
+    _, errors = broll_templates.validate_settings("pip", {"rotation_degrees": 90})
+    assert any("Angle" in error for error in errors)
+
+
+def _candidate(asset_id, words, order, own):
+    view = {"asset_id": asset_id, **({"added_for_this_video": True} if own else {})}
+    return {"asset_id": asset_id, "order": order, "words": words, "view": view}
+
+
+def test_this_videos_own_assets_are_marked_and_always_survive_the_shortlist():
+    entry = {
+        "id": "aaaaaaaaaaaa", "media_type": "image", "library": broll_library.LIBRARY_PROJECT,
+        "display_name": None, "description": "a meme", "tags": [],
+        "measured": {"width": 10, "height": 10, "aspect_ratio": 1.0, "orientation": "square"},
+    }
+    assert broll_planner.catalog_view(entry)["added_for_this_video"] is True
+    assert "added_for_this_video" not in broll_planner.catalog_view({**entry, "library": broll_library.LIBRARY_GENERAL})
+
+    # Two places, three general assets matching the speech, one own asset matching nothing.
+    general = [_candidate("g%d" % index, "sales chart", index, False) for index in range(3)]
+    own = _candidate("own", "unrelated words", 3, True)
+    chosen, record = broll_planner.shortlist(general + [own], "the sales chart went up", limit=2)
+    assert [candidate["asset_id"] for candidate in chosen] == ["g0", "own"]
+    assert record["method"] == "word_overlap"
+
+
+def test_only_video_shaped_assets_may_fill_the_frame():
+    # A 9:16 frame admits roughly 0.45–0.70 (phone screenshots and recordings).
+    assert broll_templates.fits_full_frame(1080, 1920, 1080, 1920)
+    assert broll_templates.fits_full_frame(1080, 2340, 1080, 1920)
+    assert not broll_templates.fits_full_frame(1920, 1080, 1080, 1920)
+    assert not broll_templates.fits_full_frame(1000, 1000, 1080, 1920)
+    assert not broll_templates.fits_full_frame(0, 0, 1080, 1920)
+
+
+def test_a_planned_full_frame_of_a_landscape_asset_becomes_picture_in_picture(setup, checker):
+    # The 320×240 clip on the 360×640 test video: not the video's shape.
+    plan, errors = checker(answer(clip_at(setup["clip"], 1, 2.5, template_id="fullframe", settings={"fit": "cover"})))
+    assert errors == [], errors
+    placement = plan["placements"][0]
+    assert placement["template_id"] == "pip" and "fit" not in placement["settings"]
+    assert any("picture-in-picture instead of full-frame" in note for note in plan["normalisation"]["notes"])
+
+
+def test_a_hand_placed_full_frame_of_a_landscape_asset_is_refused(client, setup):
+    pid, key = setup["project"], setup["key"]
+    response = client.put(f"/projects/{pid}/broll/inputs/{key}/plan", json={"base_revision": 0, "placements": [
+        {"id": "p00000001", "asset_id": setup["clip"], "template_id": "fullframe", "start": 1.0, "end": 2.0,
+         "source_start": 0.0, "settings": {}},
+    ]})
+    assert response.status_code == 400 and "cannot fill the frame" in response.json()["detail"]
