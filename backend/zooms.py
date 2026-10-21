@@ -122,9 +122,13 @@ def read_settings(project: dict) -> dict:
     block = block if isinstance(block, dict) else {}
     preference = block.get("preference")
     selected = block.get("selected_input")
+    selected_for = block.get("selected_for")
     return {
         "preference": preference if preference in zoom_planner.PREFERENCES else zoom_planner.DEFAULT_PREFERENCE,
         "selected_input": selected if isinstance(selected, str) else None,
+        # The newest cut output when the selection was made: a newer one
+        # replaces the selection (see `current_input`).
+        "selected_for": selected_for if isinstance(selected_for, str) else None,
     }
 
 
@@ -138,6 +142,7 @@ def save_settings(project_id: str, *, preference: Any = None, selected_input: An
     if selected_input is not None:
         validate_input_key(project_id, selected_input)
         current["selected_input"] = selected_input
+        current["selected_for"] = default_input(project_id)
     project["settings"][SETTINGS_KEY] = current
     storage.write_project(project)
     return current
@@ -173,6 +178,22 @@ def default_input(project_id: str) -> str | None:
         if entry["kind"] == caption_inputs.KIND_CUT:
             return entry["key"]
     return entries[0]["key"] if entries else None
+
+
+def current_input(project_id: str) -> str | None:
+    """The video the zoom stage works on: always the newest output of the
+    cutting stage. A video picked by hand stays chosen only until cutting
+    makes something newer."""
+    settings = read_settings(storage.read_project(project_id))
+    newest = default_input(project_id)
+    selected = settings["selected_input"]
+    if (
+        selected is not None
+        and settings["selected_for"] == newest
+        and selected in {entry["key"] for entry in list_inputs(project_id)}
+    ):
+        return selected
+    return newest
 
 
 def clip_boundaries(project_id: str, key: str) -> list[dict] | None:

@@ -18,6 +18,10 @@ becomes outdated by itself when that result changes; nothing is cleared. A
 stage is done only when its own acceptance holds and the stage before it is
 done.
 
+Every stage works on the newest output of the stage before it: a newer
+merged cut outdates the accepted one, and the zoom stage's result is its
+newest run, not an older approved one.
+
 The preview is the furthest video reached — the zoomed video, else the
 accepted (or newest) merged cut, else the first clip — composed exactly like
 the B-roll review: current captions and B-roll drawn live over it. Once
@@ -183,6 +187,9 @@ def _cutting(project_id: str, project: dict, accepted: dict | None) -> dict:
             outdated = "The accepted merged video changed on disk."
         elif manifest is not None and not set(_run_source_ids(manifest)) <= footage_ids:
             outdated = "The accepted cut uses clips that are no longer in the footage."
+        elif candidate is not None and candidate["key"] != accepted.get("key"):
+            # The stages after this one always work on the newest cut.
+            outdated = "A newer merged video was made after this one was accepted."
     return _stage(
         STAGE_CUTTING,
         done=accepted is not None and outdated is None,
@@ -247,22 +254,22 @@ def _zoom_runs_for(project_id: str, cut_key: str | None) -> list[dict]:
 
 
 def _zooms(project_id: str, runs: list[dict]) -> tuple[dict, str | None]:
-    approved = None
-    for manifest in runs:
+    """The newest zoom run is the stage's result; it is done once that run is
+    approved (an older approved run does not count)."""
+    chosen = runs[0] if runs else None
+    approved = False
+    if chosen is not None:
         try:
-            if zooms.review_state(project_id, manifest)["approved"]:
-                approved = manifest
-                break
+            approved = zooms.review_state(project_id, chosen)["approved"]
         except storage.ProjectError:
-            continue
-    chosen = approved or (runs[0] if runs else None)
+            approved = False
     key = "zoom.%s" % chosen["run_id"] if chosen else None
     summary = (
-        "Approved zoom run %s" % approved["run_id"][:6] if approved
+        "Approved zoom run %s" % chosen["run_id"][:6] if approved
         else "Zoom run %s, not approved yet" % chosen["run_id"][:6] if chosen
         else "Not zoomed yet"
     )
-    return _stage(STAGE_ZOOMS, done=approved is not None, summary=summary), key
+    return _stage(STAGE_ZOOMS, done=approved, summary=summary), key
 
 
 def _broll(project_id: str, project: dict, zoom_key: str | None, zooms_done: bool) -> dict:

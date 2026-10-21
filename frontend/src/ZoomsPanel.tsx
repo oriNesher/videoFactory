@@ -106,6 +106,19 @@ export default function ZoomsPanel({ project, onJobSubmitted }: { project: Proje
     }
   }, [loadStatus])
 
+  // The video always follows the cutting stage's newest output; pick up a
+  // new cut without a reload.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadStatus()
+        .then((loaded) => {
+          if (loaded.selected_input && loaded.selected_input !== selectedKey) setSelectedKey(loaded.selected_input)
+        })
+        .catch(() => undefined)
+    }, 8000)
+    return () => window.clearInterval(interval)
+  }, [loadStatus, selectedKey])
+
   const refresh = useCallback(async () => {
     if (!selectedKey) return
     try {

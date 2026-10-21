@@ -103,13 +103,12 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
     void refresh()
   }, [selectedKey, refresh])
 
-  // A zoom approval hands its result over to this panel (it saves the
-  // selection and starts planning); pick that up without a reload.
+  // The video always follows the zoom stage's newest output (and a zoom
+  // approval hands its result over here); pick that up without a reload.
   useEffect(() => {
     const interval = window.setInterval(() => {
       void loadStatus().then((loaded) => {
-        if (loaded.settings.selected_input && loaded.settings.selected_input !== selectedKey)
-          setSelectedKey(loaded.settings.selected_input)
+        if (loaded.selected_input && loaded.selected_input !== selectedKey) setSelectedKey(loaded.selected_input)
       })
     }, 8000)
     return () => window.clearInterval(interval)

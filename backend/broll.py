@@ -134,6 +134,7 @@ def read_settings(project: dict) -> dict:
     block = project.get("settings", {}).get(SETTINGS_KEY)
     block = block if isinstance(block, dict) else {}
     selected = block.get("selected_input")
+    selected_for = block.get("selected_for")
     enabled = block.get("enabled")
     preference = block.get("preference")
     return {
@@ -142,6 +143,9 @@ def read_settings(project: dict) -> dict:
         # it straight to the export.
         "enabled": enabled if isinstance(enabled, bool) else True,
         "selected_input": selected if isinstance(selected, str) else None,
+        # The newest zoom output when the selection was made: a newer one
+        # replaces the selection (see `current_input`).
+        "selected_for": selected_for if isinstance(selected_for, str) else None,
         "preference": preference if preference in PLANNER_PREFERENCES else DEFAULT_PLANNER_PREFERENCE,
     }
 
@@ -162,6 +166,7 @@ def save_settings(
     if selected_input is not None:
         caption_inputs.resolve(project_id, selected_input)
         current["selected_input"] = selected_input
+        current["selected_for"] = default_input(project_id)
     project["settings"][SETTINGS_KEY] = current
     storage.write_project(project)
     return current
@@ -176,18 +181,30 @@ def list_inputs(project_id: str) -> list[dict]:
 
 
 def default_input(project_id: str) -> str | None:
-    """The factory's latest approved result first: an approved, current zoom
-    output; otherwise the zoom module's own default (newest merged cut video,
-    then a cut clip, then the first available video)."""
+    """The zoom stage's newest output: the newest finished zoom run of the
+    video the zoom stage works on now. Before that video is zoomed, the video
+    itself (newest merged cut, then a cut clip, then the first video)."""
+    zoom_input = zooms.current_input(project_id)
     for manifest in zooms.list_runs(project_id):
-        if manifest.get("status") != zooms.RUN_SUCCEEDED:
-            continue
-        try:
-            if zooms.review_state(project_id, manifest)["approved"]:
-                return "zoom.%s" % manifest["run_id"]
-        except storage.ProjectError:
-            continue
-    return zooms.default_input(project_id)
+        if manifest.get("status") == zooms.RUN_SUCCEEDED and manifest["input"]["key"] == zoom_input:
+            return "zoom.%s" % manifest["run_id"]
+    return zoom_input
+
+
+def current_input(project_id: str) -> str | None:
+    """The video the B-roll stage works on: always the zoom stage's newest
+    output. A video picked by hand stays chosen only until the zoom stage
+    makes something newer."""
+    settings = read_settings(storage.read_project(project_id))
+    newest = default_input(project_id)
+    selected = settings["selected_input"]
+    if (
+        selected is not None
+        and settings["selected_for"] == newest
+        and selected in {entry["key"] for entry in list_inputs(project_id)}
+    ):
+        return selected
+    return newest
 
 
 def describe_base(project_id: str, key: Any) -> dict:

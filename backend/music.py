@@ -145,12 +145,8 @@ def save_settings(project_id: str, changes: Any) -> dict:
 
 
 def input_key(project_id: str) -> str | None:
-    """The video the B-roll stage works on (its selection, else its default)."""
-    project = storage.read_project(project_id)
-    selected = broll.read_settings(project)["selected_input"]
-    if selected and selected in {entry["key"] for entry in broll.list_inputs(project_id)}:
-        return selected
-    return broll.default_input(project_id)
+    """The video the B-roll stage works on: the zoom stage's newest output."""
+    return broll.current_input(project_id)
 
 
 def _broll_state(project_id: str, project: dict, composed: dict) -> str:

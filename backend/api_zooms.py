@@ -61,9 +61,7 @@ def status(project_id: str):
     project = _call(storage.read_project, project_id)
     settings = zooms.read_settings(project)
     inputs = _call(zooms.list_inputs, project_id)
-    selected = settings["selected_input"]
-    if selected not in {entry["key"] for entry in inputs}:
-        selected = _call(zooms.default_input, project_id)
+    selected = _call(zooms.current_input, project_id)
     return {
         "provider": zoom_planner.provider_status(),
         "presets": zoom_planner.PRESETS,
