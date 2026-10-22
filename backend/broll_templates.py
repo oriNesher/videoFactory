@@ -43,6 +43,47 @@ PIP_POSITIONS = PIP_PLANNER_POSITIONS + ("custom",)
 PIP_PLANNER_MIN_SIZE = 40.0
 PIP_PLANNER_MAX_SIZE = 80.0
 
+# How a placement appears when it starts. Both templates have the same two
+# settings; the renderer is `frontend/src/broll/entrance.ts`. "none" is a hard
+# cut, the default, so plans made before entrances existed look as they did.
+ENTRANCE_NONE = "none"
+ENTRANCES = {
+    ENTRANCE_NONE: "None (cut)",
+    "fade": "Fade in",
+    "zoom": "Zoom in",
+    "slide": "Slide in",
+    "pop": "Pop in",
+    "blur": "Blur in",
+    "spin": "Spin in",
+    "wipe": "Wipe in",
+}
+ENTRANCE_KEYS = ("entrance", "entrance_seconds")
+ENTRANCE_SETTINGS = {
+    "entrance": {
+        "type": "choice",
+        "choices": list(ENTRANCES),
+        "choice_labels": ENTRANCES,
+        "default": ENTRANCE_NONE,
+        "label": "Entrance",
+        "description": (
+            "How the B-roll appears. fade: from transparent. zoom: grows from smaller while fading in. "
+            "slide: rises in from below the frame. pop: springs up from nothing with a small overshoot. "
+            "blur: sharpens from a blur while fading in. spin: turns in while growing. wipe: revealed "
+            "from left to right. none: a plain cut."
+        ),
+    },
+    "entrance_seconds": {
+        "type": "number",
+        "min": 0.1,
+        "max": 2.0,
+        "default": 0.4,
+        "step": 0.05,
+        "label": "Entrance length",
+        "unit": "s",
+        "description": "How long the entrance takes; never longer than the placement itself.",
+    },
+}
+
 TEMPLATES: list[dict] = [
     {
         "id": FULLFRAME,
@@ -81,6 +122,7 @@ TEMPLATES: list[dict] = [
                 "label": "Mute the asset",
                 "description": "Video assets only. Off mixes the asset's own audio under the speaker.",
             },
+            **ENTRANCE_SETTINGS,
         },
     },
     {
@@ -164,6 +206,7 @@ TEMPLATES: list[dict] = [
                 "label": "Mute the asset",
                 "description": "Video assets only. Off mixes the asset's own audio under the speaker.",
             },
+            **ENTRANCE_SETTINGS,
         },
     },
 ]
@@ -251,11 +294,24 @@ def resolve_settings(template_id: str, settings: dict, *, caption_position_perce
     values. `auto` is `above_captions`; the renderer places that box from the
     caption layout it is given (see `caption_layout` in the B-roll props).
     `caption_position_percent` is kept for callers; the side is decided there.
+
+    Without an entrance its two settings are left out, so a placement that
+    is a plain cut composes exactly as before entrances existed (and an
+    approval made then still names what is composed).
     """
     resolved = dict(settings)
     if template_id == PIP and resolved.get("position") == "auto":
         resolved["position"] = "above_captions"
+    if resolved.get("entrance", ENTRANCE_NONE) == ENTRANCE_NONE:
+        for key in ENTRANCE_KEYS:
+            resolved.pop(key, None)
     return resolved
+
+
+def entrance_of(settings: Any) -> dict:
+    """The entrance settings of a placement, to carry over to another template."""
+    settings = settings if isinstance(settings, dict) else {}
+    return {key: settings[key] for key in ENTRANCE_KEYS if key in settings}
 
 
 def catalog() -> dict:

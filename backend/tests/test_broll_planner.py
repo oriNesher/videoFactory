@@ -189,8 +189,8 @@ def test_only_described_available_assets_are_offered_without_paths_or_names(clie
     assert "described_by_user" in clip and "duration_seconds" in clip["measured"]
     # Only the whitelisted settings; asset audio cannot be unmuted by the planner.
     templates = {template["id"]: template for template in request["templates"]}
-    assert set(templates["fullframe"]["settings_you_may_set"]) == {"fit"}
-    assert set(templates["pip"]["settings_you_may_set"]) == {"position", "size_percent"}
+    assert set(templates["fullframe"]["settings_you_may_set"]) == {"fit", "entrance", "entrance_seconds"}
+    assert set(templates["pip"]["settings_you_may_set"]) == {"position", "size_percent", "entrance", "entrance_seconds"}
     assert request["transcript"]["segments"][0]["text"].startswith("שלום")
     assert "words" not in request["transcript"]["segments"][0]  # phrase level only
     state = state_of(client, setup["project"], setup["key"])
@@ -266,6 +266,9 @@ def checker(setup, client):
         # A free position and the angle are manual corrections, never the planner's.
         (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"position": "custom"})), "position must be one of"),
         (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"x_percent": 10})), "cannot be set"),
+        (lambda s: answer(image_at(s["image"], 1, 3, settings={"entrance": "dissolve"})), "Entrance must be one of"),
+        (lambda s: answer(image_at(s["image"], 1, 3, settings={"entrance": "fade", "entrance_seconds": 5})),
+         "Entrance length must be between"),
         (lambda s: answer(image_at(s["image"], float("nan"), 3)), "finite"),
         (lambda s: answer(image_at(s["image"], "1", 3)), "finite"),
         (lambda s: answer(image_at(s["image"], -0.5, 1)), "starts before 0"),
@@ -681,6 +684,48 @@ def test_a_planned_full_frame_of_a_landscape_asset_becomes_picture_in_picture(se
     placement = plan["placements"][0]
     assert placement["template_id"] == "pip" and "fit" not in placement["settings"]
     assert any("picture-in-picture instead of full-frame" in note for note in plan["normalisation"]["notes"])
+
+
+def test_the_planner_chooses_an_entrance_and_it_survives_a_change_of_template(setup, checker):
+    plan, errors = checker(answer(
+        image_at(setup["image"], 0.6, 2.0, settings={"entrance": "pop", "entrance_seconds": 0.5}),
+        # Not the video's shape: picture-in-picture instead, with the entrance it was given.
+        clip_at(setup["clip"], 2.5, 4.0, template_id="fullframe", settings={"fit": "cover", "entrance": "wipe"}),
+    ))
+    assert errors == [], errors
+    first, second = plan["placements"]
+    assert (first["settings"]["entrance"], first["settings"]["entrance_seconds"]) == ("pop", 0.5)
+    assert second["template_id"] == "pip" and second["settings"]["entrance"] == "wipe"
+    assert second["settings"]["entrance_seconds"] == broll_templates.ENTRANCE_SETTINGS["entrance_seconds"]["default"]
+    assert set(broll_templates.ENTRANCES) <= set(
+        broll_planner.response_schema([])["properties"]["placements"]["items"]["properties"]["settings"]
+        ["properties"]["entrance"]["enum"]
+    )
+
+
+def test_a_plain_cut_composes_as_before_entrances_existed():
+    settings, errors = broll_templates.validate_settings("fullframe", {})
+    assert errors == [] and settings["entrance"] == "none"
+    resolved = broll_templates.resolve_settings("fullframe", settings, caption_position_percent=80)
+    assert resolved == {"fit": "contain", "caption_scrim": True, "muted": True}
+    animated = broll_templates.resolve_settings(
+        "fullframe", {**settings, "entrance": "blur", "entrance_seconds": 0.8}, caption_position_percent=80
+    )
+    assert (animated["entrance"], animated["entrance_seconds"]) == ("blur", 0.8)
+
+
+def test_switching_template_by_hand_keeps_the_entrance(client, setup):
+    pid, key = setup["project"], setup["key"]
+    plan = broll.save_plan(pid, key, [
+        {"id": "p00000001", "asset_id": setup["image"], "template_id": "pip", "start": 1.0, "end": 2.0,
+         "source_start": None, "settings": {"position": "top_left", "entrance": "spin", "entrance_seconds": 1.2}},
+    ], base_revision=0)
+    # Switching to full-frame and back: the position resets, the entrance stays.
+    plan = broll.update_placement(pid, key, "p00000001", {"template_id": "fullframe"}, base_revision=plan["revision"])
+    assert plan["placements"][0]["settings"]["entrance"] == "spin"
+    plan = broll.update_placement(pid, key, "p00000001", {"template_id": "pip"}, base_revision=plan["revision"])
+    settings = plan["placements"][0]["settings"]
+    assert settings["position"] == "auto" and (settings["entrance"], settings["entrance_seconds"]) == ("spin", 1.2)
 
 
 def test_a_hand_placed_full_frame_of_a_landscape_asset_is_refused(client, setup):

@@ -18,7 +18,8 @@ length, speed or speech: the base keeps playing underneath every placement.
     {"id": "p1a2b3c4d", "asset_id": "<library id>", "template_id": "fullframe" | "pip",
      "start": 3.2, "end": 6.2,          # seconds on the base timeline, half-open
      "source_start": 0.0,               # video assets: in-point in the asset; images: null
-     "settings": {...}}                 # the template's settings, defaults filled in
+     "settings": {...}}                 # the template's settings, defaults filled in,
+                                        # including its entrance animation and length
 
 Validation is the same for a placement typed by the user and for one a
 planner writes in stage 3B: known, available assets and templates; finite
@@ -633,8 +634,9 @@ def update_placement(project_id: str, key: Any, placement_id: Any, changes: Any,
         raise BrollError("That B-roll placement is not in the current plan.", status_code=404)
     updated = {**target, **changes}
     if "template_id" in changes and changes["template_id"] != target["template_id"] and "settings" not in changes:
-        # Settings belong to a template; switching starts from the new one's defaults.
-        updated["settings"] = None
+        # Settings belong to a template; switching starts from the new one's
+        # defaults, except the entrance, which both templates share.
+        updated["settings"] = broll_templates.entrance_of(target["settings"]) or None
     others = [placement for placement in placements if placement["id"] != placement_id]
     return save_plan(project_id, key, [*others, updated], base_revision=base_revision, note="Changed a placement.")
 

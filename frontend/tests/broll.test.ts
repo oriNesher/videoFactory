@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { captionLine, PIP_MAX_HEIGHT_FRACTION, pipBox, placementFrameRange, sourceStartFrame } from '../src/broll/layout.ts'
+import { entranceFrames, entranceStyle, withTransform } from '../src/broll/entrance.ts'
 
 test('a placement covers the frames whose start time is inside it, like a caption', () => {
   // 25 fps: 1.0 s is frame 25, 2.6 s is frame 65.
@@ -111,4 +112,35 @@ test('above_captions centres the box with its bottom just above the caption line
   const high = captionLine(1080, 1920, { position_percent: 10, safe_margin_percent: 6, font_size_percent: 5 })
   const below = pipBox(1080, 1920, 1920, 1080, { position: 'above_captions', size_percent: 70, margin_percent: 4 }, high)
   assert.ok(below.top > high.bottom)
+})
+
+test('an entrance lasts its own length, never past the placement, at least one frame', () => {
+  assert.equal(entranceFrames(0.4, 25, 100), 10)
+  assert.equal(entranceFrames(2, 25, 30), 30)
+  assert.equal(entranceFrames(0.01, 25, 30), 1)
+  assert.equal(entranceFrames(undefined, 25, 30), 1)
+})
+
+test('every entrance starts hidden or away and ends exactly as without one', () => {
+  const all = ['fade', 'zoom', 'slide', 'pop', 'blur', 'spin', 'wipe'] as const
+  for (const entrance of all) {
+    const first = entranceStyle(entrance, 0, 10, 1920)
+    assert.notDeepEqual(first, {}, entrance)
+    assert.deepEqual(entranceStyle(entrance, 10, 10, 1920), {}, entrance)
+  }
+  assert.equal(entranceStyle('fade', 0, 10, 1920).opacity, 0)
+  assert.equal(entranceStyle('slide', 0, 10, 1920).transform, 'translateY(1920px)')
+  assert.equal(entranceStyle('wipe', 0, 10, 1920).clipPath, 'inset(0 100% 0 0)')
+  assert.deepEqual(entranceStyle('none', 0, 10, 1920), {})
+  assert.deepEqual(entranceStyle(undefined, 0, 10, 1920), {})
+  // Pop overshoots before it settles.
+  const scales = Array.from({ length: 10 }, (_, frame) =>
+    Number(/scale\(([\d.]+)\)/.exec(entranceStyle('pop', frame, 10, 1920).transform ?? '')![1]),
+  )
+  assert.ok(Math.max(...scales) > 1.05)
+})
+
+test("an entrance's transform comes before the box's own rotation", () => {
+  assert.equal(withTransform({ transform: 'scale(0.5)' }, 'rotate(10deg)').transform, 'scale(0.5) rotate(10deg)')
+  assert.equal(withTransform({}, undefined).transform, undefined)
 })

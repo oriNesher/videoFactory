@@ -8,6 +8,8 @@
  * points it at the backend, the render script at its own local server.
  */
 
+import type { Entrance } from './entrance.ts'
+
 export type BrollAsset = {
   id: string
   media_type: 'image' | 'video'
@@ -19,7 +21,16 @@ export type BrollAsset = {
   src?: string
 }
 
-export type FullframeSettings = {
+/**
+ * Both templates' entrance. The backend leaves both keys out when there is
+ * none (a plain cut), and older plans never have them.
+ */
+export type EntranceSettings = {
+  entrance?: Entrance
+  entrance_seconds?: number
+}
+
+export type FullframeSettings = EntranceSettings & {
   fit: 'contain' | 'cover'
   caption_scrim: boolean
   muted: boolean
@@ -34,7 +45,7 @@ export type PipCorner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right
  */
 export type PipPosition = PipCorner | 'above_captions' | 'custom'
 
-export type PipSettings = {
+export type PipSettings = EntranceSettings & {
   position: PipPosition
   size_percent: number
   margin_percent: number

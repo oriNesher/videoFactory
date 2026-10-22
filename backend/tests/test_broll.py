@@ -325,10 +325,13 @@ def test_valid_placements_back_to_back_and_defaults_filled(client, ready):
     ])
     assert result["valid"], result["errors"]
     first, second, third = result["placements"]
-    assert first["settings"] == {"fit": "contain", "caption_scrim": True, "muted": True}
+    assert first["settings"] == {
+        "fit": "contain", "caption_scrim": True, "muted": True, "entrance": "none", "entrance_seconds": 0.4,
+    }
     assert second["settings"] == {
         "position": "auto", "size_percent": 70.0, "margin_percent": 4.0,
         "x_percent": 50.0, "y_percent": 30.0, "rotation_degrees": 0.0, "muted": True,
+        "entrance": "none", "entrance_seconds": 0.4,
     }
     assert first["end"] == second["start"] and third["end"] == 4.0 and third["start"] == 3.5
 

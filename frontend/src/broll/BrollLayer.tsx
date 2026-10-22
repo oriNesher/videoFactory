@@ -10,10 +10,14 @@
  * video has it at that moment) is simply visible again.
  *
  * Asset audio is muted unless the placement's `muted` setting is false.
+ *
+ * A placement may open with an entrance animation (./entrance.ts) over its
+ * first frames; it always ends with a cut.
  */
 
-import { AbsoluteFill, Img, Sequence, useVideoConfig } from 'remotion'
+import { AbsoluteFill, Img, Sequence, useCurrentFrame, useVideoConfig } from 'remotion'
 import { Video } from '@remotion/media'
+import { entranceFrames, entranceStyle, withTransform } from './entrance'
 import { captionLine, pipBox, placementFrameRange, sourceStartFrame } from './layout'
 import type { BrollAsset, BrollPlacement, BrollProps, CaptionLayout } from './types'
 
@@ -32,7 +36,12 @@ export function BrollLayer({ broll }: { broll: BrollProps }) {
             premountFor={Math.round(fps)}
             name={`B-roll ${placement.template_id}`}
           >
-            <Placement placement={placement} captionBand={broll.caption_band} captionLayout={broll.caption_layout ?? null} />
+            <Placement
+              placement={placement}
+              placementFrames={to - from}
+              captionBand={broll.caption_band}
+              captionLayout={broll.caption_layout ?? null}
+            />
           </Sequence>
         )
       })}
@@ -42,19 +51,25 @@ export function BrollLayer({ broll }: { broll: BrollProps }) {
 
 function Placement({
   placement,
+  placementFrames,
   captionBand,
   captionLayout,
 }: {
   placement: BrollPlacement
+  placementFrames: number
   captionBand: BrollProps['caption_band']
   captionLayout: CaptionLayout | null
 }) {
   const { width, height, fps } = useVideoConfig()
+  // Counted from the placement's first frame (inside its <Sequence>).
+  const frame = useCurrentFrame()
+  const { entrance, entrance_seconds } = placement.settings
+  const appear = entranceStyle(entrance, frame, entranceFrames(entrance_seconds, fps, placementFrames), height)
 
   if (placement.template_id === 'fullframe') {
     const { fit, caption_scrim, muted } = placement.settings
     return (
-      <AbsoluteFill style={{ backgroundColor: 'black' }}>
+      <AbsoluteFill style={{ backgroundColor: 'black', ...appear }}>
         <AssetMedia asset={placement.asset} fit={fit} muted={muted} trimBefore={sourceStartFrame(placement.source_start, fps)} />
         {caption_scrim && captionBand && (
           <AbsoluteFill
@@ -77,7 +92,10 @@ function Placement({
           position: 'absolute',
           ...box,
           overflow: 'hidden',
-          transform: placement.settings.rotation_degrees ? `rotate(${placement.settings.rotation_degrees}deg)` : undefined,
+          ...withTransform(
+            appear,
+            placement.settings.rotation_degrees ? `rotate(${placement.settings.rotation_degrees}deg)` : undefined,
+          ),
           transformOrigin: 'center',
         }}
       >

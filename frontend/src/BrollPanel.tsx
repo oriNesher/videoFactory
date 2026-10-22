@@ -837,6 +837,8 @@ function PlacementRow({
             const value = placement.settings[key] ?? spec.default
             // The free position's two numbers only matter for a custom position.
             if ((key === 'x_percent' || key === 'y_percent') && placement.settings.position !== 'custom') return null
+            // Nor does the entrance's length without an entrance.
+            if (key === 'entrance_seconds' && (placement.settings.entrance ?? 'none') === 'none') return null
             if (spec.type === 'boolean')
               return (
                 <label key={key} className="choice" title={spec.description}>
@@ -860,7 +862,7 @@ function PlacementRow({
                   >
                     {spec.choices?.map((choice) => (
                       <option key={choice} value={choice}>
-                        {choice.replace('_', ' ')}
+                        {spec.choice_labels?.[choice] ?? choice.replace('_', ' ')}
                       </option>
                     ))}
                   </select>

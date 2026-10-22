@@ -50,7 +50,7 @@ from . import broll, broll_library, broll_templates, gemini
 from .config import GEMINI_API_KEY_ENV_VAR, get_zoom_provider_settings
 from .llm import ProviderError
 
-PROMPT_VERSION = "broll-plan-v5"  # v2: more B-roll, humour, own assets; v3: bigger PiP above captions; v4: full-frame only for video-shaped assets; v5: a hook is required
+PROMPT_VERSION = "broll-plan-v6"  # v2: more B-roll, humour, own assets; v3: bigger PiP above captions; v4: full-frame only for video-shaped assets; v5: a hook is required; v6: entrance animations
 RULES_VERSION = 1
 
 # Editorial hard limits for *planned* placements (manual ones keep 3A's rules).
@@ -76,8 +76,8 @@ MAX_REQUEST_CHARACTERS = 120000
 # The settings a planner may choose; everything else stays at its default.
 # Asset audio in particular stays muted: the planner cannot add sound.
 PLANNER_SETTINGS = {
-    broll_templates.FULLFRAME: ("fit",),
-    broll_templates.PIP: ("position", "size_percent"),
+    broll_templates.FULLFRAME: ("fit", *broll_templates.ENTRANCE_KEYS),
+    broll_templates.PIP: ("position", "size_percent", *broll_templates.ENTRANCE_KEYS),
 }
 ALLOWED_PLACEMENT_KEYS = {"asset_id", "template_id", "start", "end", "source_start", "settings", "rationale", "spoken_text"}
 ALLOWED_TOP_LEVEL_KEYS = {"summary", "placements", "missing_asset_suggestions"}
@@ -269,7 +269,7 @@ def template_view() -> list[dict]:
                     key: _planner_view_of_setting(key, template["settings"][key])
                     for key in allowed
                 },
-                "fixed": "Asset audio is muted; captions are drawn on top; no transitions (simple cuts).",
+                "fixed": "Asset audio is muted; captions are drawn on top; the B-roll ends with a plain cut.",
             }
         )
     return views
@@ -278,6 +278,11 @@ def template_view() -> list[dict]:
 def _planner_view_of_setting(key: str, spec: dict) -> dict:
     """A setting as the planner is told about it: within the planner's own limits."""
     view = {name: value for name, value in spec.items() if name in ("type", "choices", "min", "max", "default", "description")}
+    if key == "entrance_seconds":
+        view["description"] = (
+            "Seconds the entrance takes, inside the placement (it starts at `start`). Usually 0.3-0.6; "
+            "up to about 1 for a calm fade or blur. Ignored when entrance is none."
+        )
     if key == "position":
         view["choices"] = list(broll_templates.PIP_PLANNER_POSITIONS)
         view["description"] = (
@@ -328,6 +333,8 @@ def response_schema(asset_ids: list[str]) -> dict:
                                 "fit": {"type": "string", "enum": ["contain", "cover"]},
                                 "position": {"type": "string", "enum": list(broll_templates.PIP_PLANNER_POSITIONS)},
                                 "size_percent": {"type": "number"},
+                                "entrance": {"type": "string", "enum": list(broll_templates.ENTRANCES)},
+                                "entrance_seconds": {"type": "number"},
                             },
                         },
                         "rationale": {"type": "string", "description": "a few words in English linking the asset to what is said"},
@@ -505,6 +512,11 @@ can.
 - picture-in-picture (pip) keeps the speaker visible; full-frame (fullframe) \
 replaces the picture. Use fullframe only for an asset with fits_full_frame: \
 true (shaped like the video); every other asset is pip.
+- Give every placement an entrance (settings.entrance) and its length \
+(settings.entrance_seconds) that suit the moment: pop or zoom for a punchy \
+hook or a joke, slide or wipe to bring in something new, fade or blur for a \
+calm or emotional line, spin only rarely, for something playful. Vary them \
+across the video rather than using one everywhere; none is a hard cut.
 - A loosely related asset does not prove the speaker's factual claim; do not \
 present it as evidence.
 - Humour is welcome. Memes and funny visuals may react to a line, exaggerate \
@@ -618,9 +630,10 @@ def validate_answer(
             measured["width"], measured["height"], base["width"], base["height"]
         ):
             # Not the video's shape: shown as picture-in-picture instead (the
-            # planner's fit setting belongs to full-frame and is dropped).
+            # planner's fit setting belongs to full-frame and is dropped; the
+            # entrance is shared by both templates and kept).
             notes.append("%s: not shaped like the video, so picture-in-picture instead of full-frame." % label)
-            template_id, settings = broll_templates.PIP, {}
+            template_id, settings = broll_templates.PIP, broll_templates.entrance_of(settings)
         not_allowed = sorted(set(settings) - set(PLANNER_SETTINGS[template_id]))
         if not_allowed:
             errors.append(

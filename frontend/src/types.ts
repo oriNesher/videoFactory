@@ -1152,6 +1152,8 @@ export type BrollTemplateSetting = {
   description: string
   default: unknown
   choices?: string[]
+  /** What to show for each choice, where the raw value is not readable as it is. */
+  choice_labels?: Record<string, string>
   min?: number
   max?: number
   step?: number
