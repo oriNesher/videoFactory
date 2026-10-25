@@ -7,18 +7,22 @@ import {
   cancelJob,
   captionExportUrl,
   decideBroll,
+  getBrollExternalPrompt,
   getBrollInput,
   getBrollLibrary,
   getBrollStatus,
+  importBrollExternalPlan,
   importCaptionVideo,
   removeBrollPlacement,
   restoreBrollRevision,
   retryJob,
   saveBrollSettings,
+  saveCaptionStyle,
   startBrollPlanning,
   updateBrollPlacement,
 } from './api'
 import BrollTimelineTable from './BrollTimelineTable'
+import ExternalPlanner from './ExternalPlanner'
 import LibraryWindow from './LibraryWindow'
 import { usePreviewBridge } from './previewBridge'
 import { describeAsset, fitsFullFrame } from './brollFormat'
@@ -379,9 +383,36 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
           onSkip={() => void decide('skip')}
         />
       )}
+      {state?.available && selectedKey && (
+        <ExternalPlanner
+          what="B-roll plan"
+          disabled={busy || planning}
+          getPrompt={() => getBrollExternalPrompt(projectId, selectedKey)}
+          importAnswer={async (answer) => {
+            if (plan && !window.confirm('Use the imported plan? The current plan stays in the plan history.')) return null
+            const result = await importBrollExternalPlan(projectId, selectedKey, answer, revision)
+            await refresh()
+            const count = result.plan.placements.length
+            return `Plan imported: ${count} placement${count === 1 ? '' : 's'}. Review it in the preview.`
+          }}
+        />
+      )}
 
       {state?.available && props && composition && (
         <>
+          {props.captions.length > 0 && (
+            <CaptionHeight
+              key={props.style.vertical_position_percent}
+              value={props.style.vertical_position_percent}
+              disabled={busy}
+              onCommit={(value) =>
+                void act(async () => {
+                  await saveCaptionStyle(projectId, { ...props.style, vertical_position_percent: value })
+                  await refresh()
+                }, 'Moving the captions failed.')
+              }
+            />
+          )}
           <BrollTimelineTable
             captions={props.captions}
             placements={placements}
@@ -566,6 +597,45 @@ export default function BrollPanel({ project, onJobSubmitted }: { project: Proje
 }
 
 /** Progress, errors and the one action that matters right now. */
+/**
+ * The captions' height (the caption style's vertical position, shared with
+ * the Captions stage). Picture-in-picture boxes on `auto` follow it, so it
+ * is adjustable here too; saved when the slider is let go.
+ */
+function CaptionHeight({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: number
+  disabled: boolean
+  onCommit: (value: number) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const commit = () => {
+    if (draft !== value) onCommit(draft)
+  }
+  return (
+    <label className="field">
+      <span>
+        Caption height <span className="small">({Math.round(draft)}% · 0 top, 100 bottom)</span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        onChange={(event) => setDraft(Number(event.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+    </label>
+  )
+}
+
 function PlanningStatus({
   state,
   busy,

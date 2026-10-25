@@ -39,11 +39,13 @@ export type FullframeSettings = EntranceSettings & {
 export type PipCorner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right'
 
 /**
- * A corner; `above_captions` (centred, just above the caption line, or just
- * below it when captions sit at the top); or `custom`: the box's centre at
+ * A corner; `below_captions` (centred, just below the caption line, shrunk
+ * to fit above the bottom margin, or above the line without room below);
+ * `above_captions` (centred, just above the caption line, or just below it
+ * when captions sit at the top); or `custom`: the box's centre at
  * x_percent / y_percent of the frame.
  */
-export type PipPosition = PipCorner | 'above_captions' | 'custom'
+export type PipPosition = PipCorner | 'below_captions' | 'above_captions' | 'custom'
 
 export type PipSettings = EntranceSettings & {
   position: PipPosition
@@ -77,7 +79,7 @@ export type BrollProps = {
   placements: BrollPlacement[]
   /** Where captions sit, for the full-frame scrim; null without captions. */
   caption_band: 'top' | 'bottom' | null
-  /** The caption style's placement, to put a box just above the captions. Absent in older props. */
+  /** The caption style's placement, to put a box just below (or above) the captions. Absent in older props. */
   caption_layout?: CaptionLayout | null
 }
 

@@ -38,6 +38,7 @@ from .models import (
     BrollRevisionRequest,
     BrollSettingsRequest,
     BrollUpdatePlacementRequest,
+    ExternalPlanImportRequest,
 )
 
 library_router = APIRouter(prefix="/broll", tags=["broll"])
@@ -494,6 +495,22 @@ def start_planning(project_id: str, input_key: str, request: BrollPlanStartReque
         {"input_key": input_key, "force_replan": request.force_replan is True, "replace_current": request.replace_current is True},
     )
     return {"job": _job_summary(record), "reused": None}
+
+
+@router.get("/inputs/{input_key}/planner/external-prompt")
+def external_prompt(project_id: str, input_key: str):
+    """The exact instructions Gemini would get, to paste into another AI. Sends nothing."""
+    _call(storage.read_project, project_id)
+    return _call(broll_planner_jobs.external_prompt, project_id, input_key)
+
+
+@router.post("/inputs/{input_key}/planner/external-plan", status_code=201)
+def import_external_plan(project_id: str, input_key: str, request: ExternalPlanImportRequest):
+    """Use another AI's answer: validated like Gemini's, then applied as a new revision."""
+    _call(storage.read_project, project_id)
+    return _call(
+        broll_planner_jobs.import_plan, project_id, input_key, request.answer, base_revision=request.base_revision
+    )
 
 
 @router.get("/planner/runs/{run_id}")

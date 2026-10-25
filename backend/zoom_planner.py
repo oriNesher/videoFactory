@@ -51,7 +51,7 @@ PRESET_SCALE = {preset["id"]: preset["scale"] for preset in PRESETS}
 PRESET_IDS = [preset["id"] for preset in PRESETS]
 
 PLAN_SCHEMA_VERSION = 1
-PROMPT_VERSION = "zoom-plan-v1"
+PROMPT_VERSION = "zoom-plan-v2"
 
 # The canonical timebase of every plan, stated in the plan and in the request.
 TIMEBASE = "input_seconds"
@@ -128,6 +128,9 @@ NORMAL stretch, or very few changes, is fine when the content calls for it.
 Editorial guidance:
 - Follow the speech: change framing at the start of a sentence or phrase, or \
 at a join between takes, never in the middle of a word or phrase.
+- At a join between takes, prefer changing the preset (so the framing on \
+each side differs). The join is a cut already, and a framing change there \
+makes it read as a deliberate edit rather than a jump.
 - Use stronger presets selectively, for real emphasis: a hook, a key claim, \
 a punchline, a call to action. Overusing them removes their effect.
 - Prefer a natural rhythm over constant change; avoid distracting rapid \

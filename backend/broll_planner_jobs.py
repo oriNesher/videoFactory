@@ -39,6 +39,8 @@ from . import (
     broll_templates,
     caption_inputs,
     captions,
+    cutting,
+    external_llm,
     jobs,
     storage,
     zoom_jobs,
@@ -162,7 +164,7 @@ def catalog_readiness(project_id: str) -> dict:
 def caption_band(project_id: str) -> str:
     """Where captions sit (from the caption style), so B-roll can avoid them."""
     style = captions.read_style(storage.read_project(project_id))["style"]
-    return "bottom" if float(style.get("vertical_position_percent", 80)) >= 50 else "top"
+    return "bottom" if float(style.get("vertical_position_percent", 60)) >= 50 else "top"
 
 
 def zoom_intervals(project_id: str, key: str) -> list[dict] | None:
@@ -406,15 +408,35 @@ def _plan(context: jobs.JobContext, snap: dict, prepared: dict, transcript: dict
                 error.message += " (The rejected answers are saved as %s.)" % name
         raise jobs.JobFailed(error.message) from None
 
-    plan = outcome["plan"]
-    run = {
+    run = run_document(
+        snap, prepared, transcript, revision, outcome["plan"],
+        job_id=context.job_id, cache_key=prepared["cache_key"], provider=planner.describe(), audit=outcome["audit"],
+    )
+    _write_run(project_id, run)
+    return run, False
+
+
+def run_document(
+    snap: dict,
+    prepared: dict,
+    transcript: dict,
+    revision: dict,
+    plan: dict,
+    *,
+    job_id: str | None,
+    cache_key: str,
+    provider: dict,
+    audit: dict,
+) -> dict:
+    """An accepted plan with full provenance, as stored."""
+    return {
         "schema_version": RUN_SCHEMA_VERSION,
         "kind": RUN_KIND,
         "run_id": broll_planner.new_run_id(),
         "created_at": broll.now(),
-        "job_id": context.job_id,
+        "job_id": job_id,
         "request_id": snap["request_id"],
-        "cache_key": prepared["cache_key"],
+        "cache_key": cache_key,
         "base": {**snap["base"], "timeline": broll.TIMELINE_NOTE},
         "timing_identity": snap["timing_identity"],
         "transcript": {
@@ -431,7 +453,7 @@ def _plan(context: jobs.JobContext, snap: dict, prepared: dict, transcript: dict
         },
         "template_catalog_version": broll_templates.TEMPLATE_CATALOG_VERSION,
         "rules_version": broll_planner.RULES_VERSION,
-        "provider": planner.describe(),
+        "provider": provider,
         "prompt_version": broll_planner.PROMPT_VERSION,
         "preferences": {"preference": snap["preference"], "caption_band": snap["caption_band"]},
         "summary": plan["summary"],
@@ -440,11 +462,9 @@ def _plan(context: jobs.JobContext, snap: dict, prepared: dict, transcript: dict
         "suggestions": plan["suggestions"],
         "statistics": plan["statistics"],
         "normalisation": plan["normalisation"],
-        "audit": outcome["audit"],
+        "audit": audit,
         "request_sent": prepared["request"],
     }
-    _write_run(project_id, run)
-    return run, False
 
 
 def apply_run(project_id: str, run: dict, *, base_revision: int) -> dict:
@@ -509,6 +529,67 @@ def run_plan(context: jobs.JobContext) -> dict:
             if applied is not None else reason
         ),
     }
+
+
+# --- planning with an AI outside the app ---------------------------------------------------
+
+
+def _external_prepare(project_id: str, input_key: Any) -> tuple[dict, dict, dict, dict]:
+    """What Gemini would be sent for this video now. Needs an existing transcript."""
+    snap = snapshot(project_id, {"input_key": input_key})
+    if snap["transcript"] is None:
+        raise broll.BrollError(
+            "This video has no transcript yet. Transcribe it in the Captions section first; the "
+            "prompt is made from the transcript.", status_code=409,
+        )
+    transcript = captions.read_transcript(project_id, snap["transcript"]["transcript_id"])
+    revision = captions.read_revision(project_id, transcript["id"], snap["transcript"]["revision"])
+    try:
+        prepared = prepare(
+            snap, revision, transcript["result"].get("language"), transcript["input"]["metadata"]["duration_seconds"]
+        )
+    except jobs.JobFailed as error:
+        raise broll.BrollError(str(error), status_code=409) from error
+    return snap, prepared, transcript, revision
+
+
+def external_prompt(project_id: str, input_key: Any) -> dict:
+    """Exactly the instructions Gemini gets, as one text to paste into another AI."""
+    snap, prepared, _transcript, _revision = _external_prepare(project_id, input_key)
+    return {
+        "prompt": external_llm.build_prompt(broll_planner.SYSTEM_PROMPT, broll_planner.user_message(prepared["request"])),
+        "prompt_version": broll_planner.PROMPT_VERSION,
+        "filename": "%s.broll-prompt.txt" % cutting.safe_stem(os.path.basename(snap["base_path"]), "video"),
+    }
+
+
+def import_plan(project_id: str, input_key: Any, answer: Any, *, base_revision: Any) -> dict:
+    """Validate an answer from another AI like Gemini's, keep it as a run, and apply it."""
+    snap, prepared, transcript, revision = _external_prepare(project_id, input_key)
+    if active_job(project_id, snap["input_key"]) is not None:
+        raise broll.BrollError("B-roll for this video is being planned right now; wait for it or cancel it.", status_code=409)
+    try:
+        raw = external_llm.parse_answer(answer)
+    except ProviderError as error:
+        raise broll.BrollError(error.message, status_code=422) from error
+    offered = {candidate["asset_id"]: candidate for candidate in prepared["offered"]}
+    plan, errors = broll_planner.validate_answer(
+        raw, base=snap["base"], offered=offered, library=broll.library_index(project_id)
+    )
+    if plan is None:
+        raise broll.BrollError("The imported plan was rejected: %s" % " ".join(errors[:8]), status_code=422)
+    run = run_document(
+        snap, prepared, transcript, revision, plan,
+        # Never matches a provider's cache key, so "Plan B-roll" still asks Gemini.
+        job_id=None, cache_key="external:%s" % uuid.uuid4().hex, provider=external_llm.PROVIDER,
+        audit={"calls": [], "repair_used": False, "rejections": [], "imported_answer": raw},
+    )
+    try:
+        _write_run(project_id, run)
+    except jobs.JobFailed as error:
+        raise broll.BrollError(str(error), status_code=500) from error
+    applied = apply_run(project_id, run, base_revision=base_revision)
+    return {"run_id": run["run_id"], "plan": applied}
 
 
 # --- starting --------------------------------------------------------------------------

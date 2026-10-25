@@ -12,12 +12,13 @@
  * Asset audio is muted unless the placement's `muted` setting is false.
  *
  * A placement may open with an entrance animation (./entrance.ts) over its
- * first frames; it always ends with a cut.
+ * first frames. A full-frame cutaway ends with a cut; a picture-in-picture
+ * box always fades out over its last moments (pipExitOpacity, not editable).
  */
 
 import { AbsoluteFill, Img, Sequence, useCurrentFrame, useVideoConfig } from 'remotion'
 import { Video } from '@remotion/media'
-import { entranceFrames, entranceStyle, withTransform } from './entrance'
+import { entranceFrames, entranceStyle, pipExitOpacity, withTransform } from './entrance'
 import { captionLine, pipBox, placementFrameRange, sourceStartFrame } from './layout'
 import type { BrollAsset, BrollPlacement, BrollProps, CaptionLayout } from './types'
 
@@ -84,6 +85,8 @@ function Placement({
 
   const caption = captionLayout ? captionLine(width, height, captionLayout) : null
   const box = pipBox(width, height, placement.asset.width, placement.asset.height, placement.settings, caption)
+  // The exit fade multiplies whatever opacity the entrance gives (1 when none).
+  const opacity = (appear.opacity ?? 1) * pipExitOpacity(frame, placementFrames, fps)
   // A plain box: no outline, shadow or rounded corners.
   return (
     <AbsoluteFill>
@@ -96,6 +99,7 @@ function Placement({
             appear,
             placement.settings.rotation_degrees ? `rotate(${placement.settings.rotation_degrees}deg)` : undefined,
           ),
+          opacity: opacity < 1 ? opacity : undefined,
           transformOrigin: 'center',
         }}
       >

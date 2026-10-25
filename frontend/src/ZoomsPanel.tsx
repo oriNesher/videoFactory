@@ -4,8 +4,10 @@ import {
   approveZoomRun,
   cancelJob,
   captionExportUrl,
+  getZoomExternalPrompt,
   getZoomInput,
   getZoomStatus,
+  importZoomExternalPlan,
   retryJob,
   saveZoomSettings,
   startZooms,
@@ -13,6 +15,7 @@ import {
 } from './api'
 import { formatTime } from './captionFormat'
 import { CaptionedVideo } from './captions/CaptionedVideo'
+import ExternalPlanner from './ExternalPlanner'
 import type { CaptionedVideoProps } from './captions/types'
 import type { CaptionComposition, Project, ZoomInputState, ZoomRun, ZoomStatus } from './types'
 
@@ -451,6 +454,20 @@ export default function ZoomsPanel({ project, onJobSubmitted }: { project: Proje
             </div>
           </details>
         </>
+      )}
+
+      {selectedKey && state?.input.available && (
+        <ExternalPlanner
+          what="zoom plan"
+          disabled={busy || !!active}
+          getPrompt={() => getZoomExternalPrompt(projectId, selectedKey)}
+          importAnswer={async (answer) => {
+            await importZoomExternalPlan(projectId, selectedKey, answer)
+            onJobSubmitted()
+            await refresh()
+            return 'Plan imported. Rendering the zoomed video…'
+          }}
+        />
       )}
 
       <details>

@@ -705,7 +705,7 @@ def compose(project_id: str, key: Any) -> dict:
     overlay = captions_for_base(project_id, base["key"])
     project = storage.read_project(project_id)
     style = overlay["style"] if overlay else captions.read_style(project)["style"]
-    position = float(style.get("vertical_position_percent", 80))
+    position = float(style.get("vertical_position_percent", 60))
     assets_used = {placement["asset_id"]: library[placement["asset_id"]] for placement in usable}
 
     props = {
@@ -745,7 +745,7 @@ def compose(project_id: str, key: Any) -> dict:
             # Where captions sit, so a full-frame cutaway can darken that side.
             "caption_band": ("bottom" if position >= 50 else "top") if overlay else None,
             # Enough of the caption style to place a picture-in-picture box just
-            # above (or below) the caption line, as CaptionLayer lays it out.
+            # below (or above) the caption line, as CaptionLayer lays it out.
             "caption_layout": (
                 {
                     "position_percent": position,

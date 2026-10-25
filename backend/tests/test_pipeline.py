@@ -158,7 +158,7 @@ def test_a_change_upstream_reopens_that_stage_and_everything_after_it(
 
     # A new caption style outdates the captions acceptance only.
     style = client.get(f"/projects/{pid}/captions/style").json()["style"]
-    response = client.put(f"/projects/{pid}/captions/style", json={"style": {**style, "vertical_position_percent": 60.0}})
+    response = client.put(f"/projects/{pid}/captions/style", json={"style": {**style, "vertical_position_percent": 75.0}})
     assert response.status_code == 200, response.text
     state = pipeline(client, pid)
     assert stage(state, "cutting")["done"] and not stage(state, "captions")["done"]

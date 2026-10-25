@@ -35,13 +35,19 @@ PIP = "pip"
 
 # What the automatic planner may choose. "custom" (a free position from
 # x_percent / y_percent) is a manual correction only.
-# above_captions: centred across the frame, just above the caption line (just
-# below it when captions sit at the top). auto resolves to it.
-PIP_PLANNER_POSITIONS = ("auto", "above_captions", "top_left", "top_right", "bottom_left", "bottom_right")
+# below_captions: centred across the frame, just below the caption line,
+# shrunk to fit the room down to the bottom margin (just above the line when
+# there is too little room below). auto resolves to it.
+# above_captions: centred, just above the caption line (just below it when
+# captions sit at the top).
+BELOW_CAPTIONS = "below_captions"
+PIP_PLANNER_POSITIONS = (
+    "auto", BELOW_CAPTIONS, "above_captions", "top_left", "top_right", "bottom_left", "bottom_right"
+)
 PIP_POSITIONS = PIP_PLANNER_POSITIONS + ("custom",)
-# The sizes the planner may choose (real-world trial: bigger than before).
-PIP_PLANNER_MIN_SIZE = 40.0
-PIP_PLANNER_MAX_SIZE = 80.0
+# The sizes the planner may choose.
+PIP_PLANNER_MIN_SIZE = 30.0
+PIP_PLANNER_MAX_SIZE = 65.0
 
 # How a placement appears when it starts. Both templates have the same two
 # settings; the renderer is `frontend/src/broll/entrance.ts`. "none" is a hard
@@ -130,7 +136,7 @@ TEMPLATES: list[dict] = [
         "version": 1,
         "label": "Picture-in-picture",
         "description": (
-            "The asset in a box over the speaker, by default centred just above the "
+            "The asset in a box over the speaker, by default centred just below the "
             "captions. The box has the asset's own aspect ratio, so nothing is cropped "
             "or stretched; no border."
         ),
@@ -141,22 +147,24 @@ TEMPLATES: list[dict] = [
                 "default": "auto",
                 "label": "Position",
                 "description": (
-                    "auto / above_captions: centred across the frame, just above the captions "
-                    "(just below them when captions sit at the top). A corner keeps the box "
-                    "there. custom: wherever Horizontal and Vertical put the box's centre."
+                    "auto / below_captions: centred across the frame, just below the captions, "
+                    "shrunk to fit above the bottom margin (above the captions when there is too "
+                    "little room below). above_captions: centred, just above the captions (just "
+                    "below them when captions sit at the top). A corner keeps the box there. "
+                    "custom: wherever Horizontal and Vertical put the box's centre."
                 ),
             },
             "size_percent": {
                 "type": "number",
                 "min": 10.0,
                 "max": 90.0,
-                "default": 70.0,
+                "default": 55.0,
                 "step": 1.0,
                 "label": "Size",
                 "unit": "% of the frame width",
                 "description": (
                     "The box's width. Its height follows the asset's aspect ratio and is "
-                    "limited to 45% of the frame height up to a size of 60, growing with "
+                    "limited to 40% of the frame height up to a size of 60, growing with "
                     "the size above that (the box shrinks to fit)."
                 ),
             },
@@ -219,7 +227,7 @@ DEFAULT_TEMPLATE = FULLFRAME
 # the caption band at once. It holds up to a size of 60 (all the planner may
 # choose); a larger manual size raises it in proportion.
 # Mirrored in frontend/src/broll/layout.ts.
-PIP_MAX_HEIGHT_FRACTION = 0.45
+PIP_MAX_HEIGHT_FRACTION = 0.40
 
 
 # Full-frame is only for assets shaped like the video (a phone-screen asset on
@@ -291,7 +299,7 @@ def resolve_settings(template_id: str, settings: dict, *, caption_position_perce
     """Settings as the renderer receives them: `auto` made concrete.
 
     Resolved on the backend so the preview and the export are handed the same
-    values. `auto` is `above_captions`; the renderer places that box from the
+    values. `auto` is `below_captions`; the renderer places that box from the
     caption layout it is given (see `caption_layout` in the B-roll props).
     `caption_position_percent` is kept for callers; the side is decided there.
 
@@ -301,7 +309,7 @@ def resolve_settings(template_id: str, settings: dict, *, caption_position_perce
     """
     resolved = dict(settings)
     if template_id == PIP and resolved.get("position") == "auto":
-        resolved["position"] = "above_captions"
+        resolved["position"] = BELOW_CAPTIONS
     if resolved.get("entrance", ENTRANCE_NONE) == ENTRANCE_NONE:
         for key in ENTRANCE_KEYS:
             resolved.pop(key, None)

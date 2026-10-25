@@ -30,6 +30,7 @@ from . import (
     caption_jobs,
     captions,
     cutting,
+    external_llm,
     jobs,
     media,
     processes,
@@ -169,26 +170,12 @@ def _plan(context: jobs.JobContext, job_input: dict, transcript: dict) -> tuple[
             context.progress("Reusing the zoom plan already made for this transcript.")
             return existing, True
 
-    normalised, errors = captions.normalise_captions(revision["captions"], metadata["duration_seconds"])
-    if errors:
-        raise jobs.JobFailed(
-            "The latest captions of this video are not valid (%s). Fix them in the Captions "
-            "section first." % errors[0]["message"]
+    try:
+        request, segments = plan_request(
+            metadata, transcript, clips=job_input.get("clips"), preference=job_input["preference"]
         )
-    if not normalised:
-        raise jobs.JobFailed("No speech was recognised in this video, so there is nothing to plan zooms from.")
-
-    segments = zoom_planner.transcript_view(normalised)
-    request = zoom_planner.build_request(
-        duration_seconds=metadata["duration_seconds"],
-        fps=metadata["fps"],
-        width=metadata["display_width"],
-        height=metadata["display_height"],
-        segments=segments,
-        language=transcript["transcript"]["result"].get("language"),
-        clips=job_input.get("clips"),
-        preference=job_input["preference"],
-    )
+    except zooms.ZoomError as error:
+        raise jobs.JobFailed(error.message) from error
 
     try:
         outcome = zoom_planner.request_plan(
@@ -216,13 +203,68 @@ def _plan(context: jobs.JobContext, job_input: dict, transcript: dict) -> tuple[
                 error.message += " (The rejected answers are saved as %s.)" % name
         raise jobs.JobFailed(error.message) from None
 
-    plan = outcome["plan"]
-    document = {
+    document = plan_document(
+        described, transcript, segments, request, outcome["plan"],
+        job_id=context.job_id, cache_key=cache_key, provider=provider,
+        clips=job_input.get("clips"), preference=job_input["preference"], audit=outcome["audit"],
+    )
+    try:
+        zooms.write_plan(project_id, document)
+    except storage.ProjectError as error:
+        raise jobs.JobFailed(error.message) from error
+    return document, False
+
+
+def plan_request(metadata: dict, transcript: dict, *, clips: list[dict] | None, preference: str) -> tuple[dict, list[dict]]:
+    """Exactly what a planner is sent for this transcript, and its segments."""
+    revision = transcript["revision"]
+    normalised, errors = captions.normalise_captions(revision["captions"], metadata["duration_seconds"])
+    if errors:
+        raise zooms.ZoomError(
+            "The latest captions of this video are not valid (%s). Fix them in the Captions "
+            "section first." % errors[0]["message"], status_code=409,
+        )
+    if not normalised:
+        raise zooms.ZoomError(
+            "No speech was recognised in this video, so there is nothing to plan zooms from.", status_code=409
+        )
+    segments = zoom_planner.transcript_view(normalised)
+    request = zoom_planner.build_request(
+        duration_seconds=metadata["duration_seconds"],
+        fps=metadata["fps"],
+        width=metadata["display_width"],
+        height=metadata["display_height"],
+        segments=segments,
+        language=transcript["transcript"]["result"].get("language"),
+        clips=clips,
+        preference=preference,
+    )
+    return request, segments
+
+
+def plan_document(
+    described: dict,
+    transcript: dict,
+    segments: list[dict],
+    request: dict,
+    plan: dict,
+    *,
+    job_id: str | None,
+    cache_key: str,
+    provider: dict,
+    clips: list[dict] | None,
+    preference: str,
+    audit: dict,
+) -> dict:
+    """An accepted plan with its full provenance, as stored."""
+    metadata = described["metadata"]
+    revision = transcript["revision"]
+    return {
         "schema_version": zoom_planner.PLAN_SCHEMA_VERSION,
         "kind": zooms.PLAN_DOCUMENT_KIND,
         "plan_id": uuid.uuid4().hex[:12],
         "created_at": zooms.now(),
-        "job_id": context.job_id,
+        "job_id": job_id,
         "cache_key": cache_key,
         "input": {
             "key": described["key"],
@@ -240,24 +282,81 @@ def _plan(context: jobs.JobContext, job_input: dict, transcript: dict) -> tuple[
             "timing_precision": zoom_planner.describe_timing(segments),
             "segment_count": len(segments),
         },
-        "clips": job_input.get("clips"),
+        "clips": clips,
         "provider": provider,
         "prompt_version": zoom_planner.PROMPT_VERSION,
         "preset_catalog_version": zoom_planner.PRESET_CATALOG_VERSION,
         "presets": zoom_planner.PRESETS,
-        "settings": {"preference": job_input["preference"]},
+        "settings": {"preference": preference},
         "summary": plan["summary"],
         "intervals": plan["intervals"],
         "statistics": zoom_planner.plan_statistics(plan["intervals"]),
         "normalisation": plan["normalisation"],
-        "audit": outcome["audit"],
+        "audit": audit,
         "request_sent": request,
     }
+
+
+# --- planning with an AI outside the app ----------------------------------------------
+
+
+def _external_request(project_id: str, input_key: Any) -> dict:
+    """The request Gemini would get for this video now. Needs an existing transcript."""
+    zooms.validate_input_key(project_id, input_key)
+    described = caption_inputs.resolve_for_job(project_id, input_key)
+    found = zooms.find_transcript(project_id, described["key"], described["fingerprint"]["digest"])
+    if found is None:
+        raise zooms.ZoomError(
+            "This video has no transcript yet. Transcribe it in the Captions section first; the "
+            "prompt is made from the transcript.", status_code=409,
+        )
+    preference = zooms.read_settings(storage.read_project(project_id))["preference"]
+    clips = zooms.clip_boundaries(project_id, described["key"])
+    request, segments = plan_request(described["metadata"], found, clips=clips, preference=preference)
+    return {
+        "described": described, "transcript": found, "request": request, "segments": segments,
+        "clips": clips, "preference": preference,
+    }
+
+
+def external_prompt(project_id: str, input_key: Any) -> dict:
+    """Exactly the instructions Gemini gets, as one text to paste into another AI."""
+    prepared = _external_request(project_id, input_key)
+    return {
+        "prompt": external_llm.build_prompt(zoom_planner.SYSTEM_PROMPT, zoom_planner.user_message(prepared["request"])),
+        "prompt_version": zoom_planner.PROMPT_VERSION,
+        "filename": "%s.zoom-prompt.txt" % cutting.safe_stem(prepared["described"]["filename"], "video"),
+    }
+
+
+def import_plan(project_id: str, input_key: Any, answer: Any) -> dict:
+    """Validate an answer from another AI like Gemini's, store it, and render it."""
+    prepared = _external_request(project_id, input_key)
+    described = prepared["described"]
+    if active_job(project_id, described["key"]) is not None:
+        raise zooms.ZoomError("Zooms for this video are already being made.", status_code=409)
     try:
-        zooms.write_plan(project_id, document)
-    except storage.ProjectError as error:
-        raise jobs.JobFailed(error.message) from error
-    return document, False
+        raw = external_llm.parse_answer(answer)
+    except ProviderError as error:
+        raise zooms.ZoomError(error.message, status_code=422) from error
+    metadata = described["metadata"]
+    plan, errors = zoom_planner.validate_plan(raw, duration_seconds=metadata["duration_seconds"], fps=metadata["fps"])
+    if plan is None:
+        raise zooms.ZoomError("The imported plan was rejected: %s" % " ".join(errors[:8]), status_code=422)
+
+    document = plan_document(
+        described, prepared["transcript"], prepared["segments"], prepared["request"], plan,
+        # Never matches a provider's cache key, so it is never reused in place of a new Gemini plan.
+        job_id=None, cache_key="external:%s" % uuid.uuid4().hex, provider=external_llm.PROVIDER,
+        clips=prepared["clips"], preference=prepared["preference"],
+        audit={"calls": [], "repair_used": False, "rejections": [], "imported_answer": raw},
+    )
+    zooms.write_plan(project_id, document)
+    record = jobs.submit(
+        project_id, ZOOM_JOB,
+        {"input_key": described["key"], "preference": prepared["preference"], "plan_id": document["plan_id"]},
+    )
+    return {"plan_id": document["plan_id"], "job": jobs.describe_job(record)}
 
 
 def _render(context: jobs.JobContext, job_input: dict, plan: dict) -> tuple[dict, bool]:

@@ -621,6 +621,21 @@ export function startZooms(
   })
 }
 
+/** The exact instructions Gemini would get, as one text to paste into another AI. */
+export type ExternalPrompt = { prompt: string; prompt_version: string; filename: string }
+
+export function getZoomExternalPrompt(projectId: string, inputKey: string) {
+  return request<ExternalPrompt>(`${zoomsBase(projectId)}/inputs/${inputKey}/external-prompt`)
+}
+
+/** Another AI's answer, validated like Gemini's, then rendered as a queued job. */
+export function importZoomExternalPlan(projectId: string, inputKey: string, answer: string) {
+  return request<{ plan_id: string; job: Job }>(`${zoomsBase(projectId)}/inputs/${inputKey}/external-plan`, {
+    method: 'POST',
+    body: JSON.stringify({ answer }),
+  })
+}
+
 export function approveZoomRun(projectId: string, runId: string, outputDigest: string, captions: ZoomOverlayReference) {
   return request<ZoomApproveResult>(`${zoomsBase(projectId)}/runs/${runId}/approve`, {
     method: 'POST',
@@ -767,6 +782,18 @@ export function startBrollPlanning(
       body: JSON.stringify({ force_replan: options.forceReplan ?? false, replace_current: options.replaceCurrent ?? false }),
     },
   )
+}
+
+export function getBrollExternalPrompt(projectId: string, inputKey: string) {
+  return request<ExternalPrompt>(`${brollBase(projectId)}/inputs/${inputKey}/planner/external-prompt`)
+}
+
+/** Another AI's answer, validated like Gemini's, then applied as a new plan revision. */
+export function importBrollExternalPlan(projectId: string, inputKey: string, answer: string, baseRevision: number) {
+  return request<{ run_id: string; plan: BrollPlan }>(`${brollBase(projectId)}/inputs/${inputKey}/planner/external-plan`, {
+    method: 'POST',
+    body: JSON.stringify({ answer, base_revision: baseRevision }),
+  })
 }
 
 export function applyBrollPlanningRun(projectId: string, inputKey: string, runId: string, baseRevision: number) {

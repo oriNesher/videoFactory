@@ -24,7 +24,7 @@ const placeholder: CaptionedVideoProps = {
     outline_width_percent: 8,
     box_color: '#000000',
     box_opacity: 0.6,
-    vertical_position_percent: 80,
+    vertical_position_percent: 60,
     safe_margin_percent: 6,
     max_width_percent: 90,
     highlight_active_word: false,

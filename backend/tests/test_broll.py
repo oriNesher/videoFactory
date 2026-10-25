@@ -329,7 +329,7 @@ def test_valid_placements_back_to_back_and_defaults_filled(client, ready):
         "fit": "contain", "caption_scrim": True, "muted": True, "entrance": "none", "entrance_seconds": 0.4,
     }
     assert second["settings"] == {
-        "position": "auto", "size_percent": 70.0, "margin_percent": 4.0,
+        "position": "auto", "size_percent": 55.0, "margin_percent": 4.0,
         "x_percent": 50.0, "y_percent": 30.0, "rotation_degrees": 0.0, "muted": True,
         "entrance": "none", "entrance_seconds": 0.4,
     }
@@ -402,7 +402,7 @@ def test_props_are_resolved_once_for_preview_and_export(client, ready):
     full, pip = props["broll"]["placements"]
     assert full["settings"]["fit"] == "contain" and full["asset"]["media_type"] == "image"
     # "auto" is resolved on the backend: centred just above the captions (real-world trial).
-    assert pip["settings"]["position"] == "above_captions" and pip["source_start"] == 0.0
+    assert pip["settings"]["position"] == "below_captions" and pip["source_start"] == 0.0
     assert "src" not in pip["asset"] and "path" not in json.dumps(props)
 
     digest = state["composition_digest"]
@@ -622,7 +622,7 @@ def test_a_real_export_composes_zooms_broll_and_hebrew_captions_correctly(client
 
     # Captions: identical to the reference under picture-in-picture, and in the same place
     # (same white text pixels) over the full-frame image.
-    band = (slice(420, 640), slice(None))
+    band = (slice(320, 440), slice(None))  # the caption line at the default 60 %
     assert psnr(_frame(exported, 60)[band], _frame(reference_file, 60)[band]) > 35
     over_image = _frame(exported, 20)[band]
     text = (over_image > 230).all(axis=2)

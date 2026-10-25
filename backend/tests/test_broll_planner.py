@@ -262,7 +262,7 @@ def checker(setup, client):
         (lambda s: answer({**image_at(s["image"], 1, 3), "template_id": "kenburns"}), "uses template"),
         (lambda s: answer(image_at(s["image"], 1, 3, settings={"muted": False})), "cannot be set"),
         (lambda s: answer(image_at(s["image"], 1, 3, settings={"position": "top_left"})), "cannot be set"),
-        (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"size_percent": 90})), "between 40 and 80"),
+        (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"size_percent": 90})), "between 30 and 65"),
         # A free position and the angle are manual corrections, never the planner's.
         (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"position": "custom"})), "position must be one of"),
         (lambda s: answer(clip_at(s["clip"], 1, 2.5, settings={"x_percent": 10})), "cannot be set"),
@@ -617,7 +617,7 @@ def test_a_planned_composition_renders_at_the_planned_times(client, setup, fake,
         assert lime(_frame(exported, index)[68, 274]), index  # PiP top right, from the 0.5 s moment
     for index in (49, 80):
         assert not lime(_frame(exported, index)[68, 274]), index
-    band = _frame(exported, 20)[420:640]
+    band = _frame(exported, 20)[320:440]  # the caption line at the default 60 %
     assert (band > 230).all(axis=2).sum() > 50  # the caption is readable over the image
 
     ours, source = _pcm(exported), _pcm(base_file)
@@ -735,3 +735,35 @@ def test_a_hand_placed_full_frame_of_a_landscape_asset_is_refused(client, setup)
          "source_start": 0.0, "settings": {}},
     ]})
     assert response.status_code == 400 and "cannot fill the frame" in response.json()["detail"]
+
+
+def test_the_prompt_can_be_exported_and_another_ais_plan_imported(client, setup, fake, fake_whisper):
+    url = f"/projects/{setup['project']}/broll/inputs/{setup['key']}/planner"
+    refused = client.get(f"{url}/external-prompt")
+    assert refused.status_code == 409 and "transcript" in refused.json()["detail"]
+
+    fake.answers = [answer(image_at(setup["image"], 0.6, 1.6))]
+    assert plan_and_wait(client, setup)["status"] == "succeeded"
+    exported = client.get(f"{url}/external-prompt").json()
+    assert exported["prompt"].startswith(broll_planner.SYSTEM_PROMPT)
+    assert exported["prompt"].rstrip().endswith(fake.calls[0]["message"])  # exactly what Gemini got
+    assert exported["filename"].endswith(".broll-prompt.txt") and "טייק" not in exported["prompt"]
+
+    rejected = client.post(f"{url}/external-plan", json={
+        "answer": json.dumps(answer(image_at(setup["plain"], 0.4, 1.4))), "base_revision": 1})
+    assert rejected.status_code == 422 and "not one of the offered assets" in rejected.json()["detail"]
+
+    pasted = "```json\n%s\n```" % json.dumps(answer(image_at(setup["image"], 0.4, 1.4), clip_at(setup["clip"], 2.0, 3.0),
+                                                    summary="Imported from another AI."))
+    response = client.post(f"{url}/external-plan", json={"answer": pasted, "base_revision": 1})
+    assert response.status_code == 201, response.text
+    assert len(fake.calls) == 1
+
+    state = state_of(client, setup["project"], setup["key"])
+    assert state["plan"]["revision"] == 2 and state["plan"]["planner"]["run_id"] == response.json()["run_id"]
+    assert [(p["start"], p["end"]) for p in state["props"]["broll"]["placements"]] == [(0.4, 1.4), (2.0, 3.0)]
+    run = state["planner"]["run"]
+    assert run["provider"]["id"] == "external" and run["summary"] == "Imported from another AI."
+    # A stale revision is refused rather than overwritten.
+    stale = client.post(f"{url}/external-plan", json={"answer": pasted, "base_revision": 1})
+    assert stale.status_code == 409

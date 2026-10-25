@@ -220,6 +220,7 @@ def test_the_request_holds_text_and_timing_only_and_labels_precision_honestly():
         assert forbidden not in text
     assert "You have NOT seen the video" in zoom_planner.SYSTEM_PROMPT
     assert "no fixed or minimum length" in zoom_planner.SYSTEM_PROMPT
+    assert "At a join between takes, prefer changing the preset" in zoom_planner.SYSTEM_PROMPT
 
 
 # --- Gemini adapter -----------------------------------------------------------------
@@ -960,3 +961,36 @@ def test_the_capability_is_registered_with_an_executor():
     assert capabilities.ZOOMS in capabilities.CAPABILITIES
     assert capabilities.ZOOMS in job_tasks.EXECUTORS
     assert not any("Zoom" in item for item in capabilities.NOT_YET_SUPPORTED)
+
+
+@needs_ffmpeg
+def test_the_prompt_can_be_exported_and_another_ais_plan_imported(client, project, grid, fake_whisper, planner):
+    key = add_source(client, project["id"], grid)
+    url = f"/projects/{project['id']}/zooms/inputs/{key}"
+    refused = client.get(f"{url}/external-prompt")
+    assert refused.status_code == 409 and "transcript" in refused.json()["detail"]
+
+    run_to_end(client, project["id"], key)
+    exported = client.get(f"{url}/external-prompt").json()
+    assert exported["prompt"].startswith(zoom_planner.SYSTEM_PROMPT)
+    assert exported["prompt"].rstrip().endswith(planner.calls[0])  # exactly what Gemini got
+    assert exported["filename"].endswith(".zoom-prompt.txt") and FAKE_KEY not in exported["prompt"]
+
+    rejected = client.post(f"{url}/external-plan", json={"answer": json.dumps(plan_of((0, 4.0, "HUGE")))})
+    assert rejected.status_code == 422 and "not a preset" in rejected.json()["detail"]
+    assert client.post(f"{url}/external-plan", json={"answer": "no json here"}).status_code == 422
+
+    pasted = "Here is the plan:\n```json\n%s\n```" % json.dumps(
+        plan_of((0, 2.0, "PUNCH_LIGHT"), (2.0, 4.0, "NORMAL"), summary="Imported."))
+    response = client.post(f"{url}/external-plan", json={"answer": pasted})
+    assert response.status_code == 201, response.text
+    record = wait_for_job(client, project["id"], response.json()["job"]["id"])
+    assert record["status"] == "succeeded", record["error"]
+    assert record["result"]["plan_id"] == response.json()["plan_id"] and len(planner.calls) == 1
+
+    plan = client.get(f"{url}").json()["current_run"]["plan"]
+    assert plan["provider"]["id"] == "external" and plan["summary"] == "Imported."
+    assert [(i["start"], i["end"], i["preset"]) for i in plan["intervals"]] == [(0.0, 2.0, "PUNCH_LIGHT"), (2.0, 4.0, "NORMAL")]
+    # An imported plan never stands in for Gemini's: asking again reuses Gemini's own result.
+    again = start(client, project["id"], key)
+    assert again["job"] is None and again["reused"]["plan"]["provider"]["id"] == "gemini"

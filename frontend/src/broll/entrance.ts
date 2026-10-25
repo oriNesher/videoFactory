@@ -60,6 +60,22 @@ export function entranceStyle(
   }
 }
 
+/** How long every picture-in-picture box takes to fade out at its end. Not a setting. */
+export const PIP_EXIT_SECONDS = 0.3
+
+/**
+ * The opacity of a picture-in-picture box at `frame` of a placement lasting
+ * `placementFrames`: 1 until its last PIP_EXIT_SECONDS (at most a third of the
+ * placement), then falling linearly so the last frame is nearly gone and the
+ * next one, past the placement, is the speaker alone.
+ */
+export function pipExitOpacity(frame: number, placementFrames: number, fps: number): number {
+  const fadeFrames = Math.min(Math.round(PIP_EXIT_SECONDS * fps), Math.floor(placementFrames / 3))
+  const remaining = placementFrames - frame
+  if (fadeFrames < 1 || remaining > fadeFrames) return 1
+  return Math.round((Math.max(0, remaining) / (fadeFrames + 1)) * 1e4) / 1e4
+}
+
 /** `transform` from an entrance followed by the element's own (e.g. its rotation). */
 export function withTransform(entrance: ReturnType<typeof entranceStyle>, own: string | undefined): CSSProperties {
   const transform = [entrance.transform, own].filter(Boolean).join(' ')

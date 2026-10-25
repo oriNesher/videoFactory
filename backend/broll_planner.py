@@ -286,12 +286,16 @@ def _planner_view_of_setting(key: str, spec: dict) -> dict:
     if key == "position":
         view["choices"] = list(broll_templates.PIP_PLANNER_POSITIONS)
         view["description"] = (
-            "auto (recommended) or above_captions: centred across the frame, just above the captions. "
+            "auto (recommended) or below_captions: centred across the frame, just below the captions. "
+            "above_captions: centred, just above them. "
             "A corner only when the centre would hide something the speaker is showing."
         )
     if key == "size_percent":
         view["min"], view["max"] = broll_templates.PIP_PLANNER_MIN_SIZE, broll_templates.PIP_PLANNER_MAX_SIZE
-        view["description"] = "The box's width as % of the frame width. Big is good: the asset should be easy to see."
+        view["description"] = (
+            "The box's width as % of the frame width. Large enough to read the asset, "
+            "small enough to leave the speaker visible; around 50 suits most assets."
+        )
     return view
 
 

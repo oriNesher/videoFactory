@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { captionLine, PIP_MAX_HEIGHT_FRACTION, pipBox, placementFrameRange, sourceStartFrame } from '../src/broll/layout.ts'
-import { entranceFrames, entranceStyle, withTransform } from '../src/broll/entrance.ts'
+import { entranceFrames, entranceStyle, pipExitOpacity, withTransform } from '../src/broll/entrance.ts'
 
 test('a placement covers the frames whose start time is inside it, like a caption', () => {
   // 25 fps: 1.0 s is frame 25, 2.6 s is frame 65.
@@ -92,12 +92,37 @@ test('a custom position centres the box at x/y and keeps it inside the frame', (
   assert.equal(corner.top, 0)
 })
 
-test('the 45 % height limit holds up to size 60 and grows above it', () => {
+test('the 40 % height limit holds up to size 60 and grows above it', () => {
   const portrait = (size: number) =>
     pipBox(1080, 1920, 924, 2048, { position: 'top_right', size_percent: size, margin_percent: 4 })
-  assert.equal(portrait(40).height, Math.round(1920 * 0.45))
-  assert.equal(portrait(60).height, Math.round(1920 * 0.45))
-  assert.equal(portrait(90).height, Math.round(1920 * 0.45 * 1.5))
+  assert.equal(portrait(40).height, Math.round(1920 * 0.4))
+  assert.equal(portrait(60).height, Math.round(1920 * 0.4))
+  assert.equal(portrait(90).height, Math.round(1920 * 0.4 * 1.5))
+})
+
+test('below_captions centres the box with its top just below the caption line', () => {
+  // 1080×1920, captions at 60 % inside a 6 % safe margin, font 5 % of the shorter side.
+  const line = captionLine(1080, 1920, { position_percent: 60, safe_margin_percent: 6, font_size_percent: 5 })
+  const box = pipBox(1080, 1920, 1920, 1080, { position: 'below_captions', size_percent: 55, margin_percent: 4 }, line)
+  assert.equal(box.width, 594)
+  assert.equal(box.left, Math.round((1080 - 594) / 2))
+  assert.ok(box.top > line.bottom, 'the box starts below the caption line')
+  assert.ok(box.top - line.bottom < 40, 'and close to it')
+})
+
+test('below_captions shrinks a tall asset to the room above the bottom margin', () => {
+  const line = captionLine(1080, 1920, { position_percent: 60, safe_margin_percent: 6, font_size_percent: 5 })
+  const box = pipBox(1080, 1920, 1080, 1920, { position: 'below_captions', size_percent: 55, margin_percent: 4 }, line)
+  assert.ok(box.top > line.bottom)
+  assert.ok(box.top + box.height <= Math.round(1920 - 1080 * 0.04), 'inside the bottom margin')
+  assert.ok(Math.abs(box.width / box.height - 1080 / 1920) < 0.01, 'still not stretched')
+  assert.equal(box.left, Math.round((1080 - box.width) / 2))
+})
+
+test('below_captions goes above the line when captions sit too low to fit it under', () => {
+  const low = captionLine(1080, 1920, { position_percent: 95, safe_margin_percent: 6, font_size_percent: 5 })
+  const box = pipBox(1080, 1920, 1920, 1080, { position: 'below_captions', size_percent: 55, margin_percent: 4 }, low)
+  assert.ok(box.top + box.height < low.top)
 })
 
 test('above_captions centres the box with its bottom just above the caption line', () => {
@@ -138,6 +163,19 @@ test('every entrance starts hidden or away and ends exactly as without one', () 
     Number(/scale\(([\d.]+)\)/.exec(entranceStyle('pop', frame, 10, 1920).transform ?? '')![1]),
   )
   assert.ok(Math.max(...scales) > 1.05)
+})
+
+test('a picture-in-picture box fades out over its last frames, never more than a third of it', () => {
+  // 0.3 s at 30 fps: 9 frames of fade in a 100-frame placement.
+  assert.equal(pipExitOpacity(0, 100, 30), 1)
+  assert.equal(pipExitOpacity(90, 100, 30), 1)
+  assert.equal(pipExitOpacity(91, 100, 30), 0.9)
+  assert.equal(pipExitOpacity(99, 100, 30), 0.1)
+  // A 12-frame placement fades over its last 4.
+  assert.equal(pipExitOpacity(7, 12, 30), 1)
+  assert.equal(pipExitOpacity(8, 12, 30), 0.8)
+  // Too short to fade at all.
+  assert.equal(pipExitOpacity(1, 2, 30), 1)
 })
 
 test("an entrance's transform comes before the box's own rotation", () => {

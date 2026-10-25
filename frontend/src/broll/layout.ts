@@ -27,7 +27,7 @@ export function sourceStartFrame(sourceStart: number | null, fps: number): numbe
 }
 
 /** Mirrors PIP_MAX_HEIGHT_FRACTION in backend/broll_templates.py. */
-export const PIP_MAX_HEIGHT_FRACTION = 0.45
+export const PIP_MAX_HEIGHT_FRACTION = 0.4
 /** Up to this size the height limit is fixed; a larger (manual) size raises it in proportion. */
 export const PIP_LIMIT_FIXED_UP_TO_SIZE = 60
 
@@ -52,12 +52,18 @@ export function captionLine(frameWidth: number, frameHeight: number, layout: Cap
   return { top, bottom: top + lineHeight }
 }
 
-/** The gap between a box placed above the captions and the caption line. */
+/** The gap between a box placed above or below the captions and the caption line. */
 export const ABOVE_CAPTIONS_GAP_FRACTION = 0.015
 
 /**
+ * `below_captions` shrinks the box to the room under the caption line; with
+ * less room than this share of the frame height it sits above the line instead.
+ */
+export const BELOW_CAPTIONS_MIN_ROOM_FRACTION = 0.15
+
+/**
  * The picture-in-picture box: `size_percent` of the frame width, the asset's
- * own aspect ratio (so nothing is cropped or stretched), at most 45 % of the
+ * own aspect ratio (so nothing is cropped or stretched), at most 40 % of the
  * frame height (more for a manual size above 60), `margin_percent` of the
  * shorter side from the two edges of its corner — or, with `custom`, centred
  * at `x_percent` / `y_percent` of the frame, kept inside it. Rotation is
@@ -69,22 +75,33 @@ export function pipBox(
   assetWidth: number,
   assetHeight: number,
   settings: { position: PipPosition; size_percent: number; margin_percent: number; x_percent?: number; y_percent?: number },
-  /** Where the caption line is; `above_captions` without one sits above the bottom margin. */
+  /** Where the caption line is; `above_captions` / `below_captions` without one sit above the bottom margin. */
   caption?: { top: number; bottom: number } | null,
 ): Box {
   const aspect = assetWidth > 0 && assetHeight > 0 ? assetWidth / assetHeight : 16 / 9
   const margin = (Math.min(frameWidth, frameHeight) * settings.margin_percent) / 100
-  let width = (frameWidth * settings.size_percent) / 100
-  let height = width / aspect
-  const maxHeight = frameHeight * pipMaxHeightFraction(settings.size_percent)
-  if (height > maxHeight) {
-    height = maxHeight
-    width = height * aspect
+  const gap = frameHeight * ABOVE_CAPTIONS_GAP_FRACTION
+  const fit = (maxHeight: number) => {
+    let width = (frameWidth * settings.size_percent) / 100
+    let height = width / aspect
+    if (height > maxHeight) {
+      height = maxHeight
+      width = height * aspect
+    }
+    return { width: Math.round(width), height: Math.round(height) }
   }
-  width = Math.round(width)
-  height = Math.round(height)
-  if (settings.position === 'above_captions') {
-    const gap = frameHeight * ABOVE_CAPTIONS_GAP_FRACTION
+  const limit = frameHeight * pipMaxHeightFraction(settings.size_percent)
+  if (settings.position === 'below_captions' && caption) {
+    const top = caption.bottom + gap
+    const room = frameHeight - margin - top
+    if (room >= frameHeight * BELOW_CAPTIONS_MIN_ROOM_FRACTION) {
+      const { width, height } = fit(Math.min(limit, room))
+      return { left: Math.round((frameWidth - width) / 2), top: Math.round(top), width, height }
+    }
+  }
+  const { width, height } = fit(limit)
+  if (settings.position === 'above_captions' || settings.position === 'below_captions') {
+    // below_captions lands here only without room under the line: it goes above.
     const captionsAtTop = caption ? caption.top + caption.bottom < frameHeight : false
     const top = !caption
       ? frameHeight - margin - height

@@ -163,6 +163,13 @@ class ZoomStartRequest(BaseModel):
     plan_id: Any = None
 
 
+class ExternalPlanImportRequest(BaseModel):
+    # The answer of another AI to the exported prompt: pasted text or JSON.
+    answer: Any = None
+    # B-roll only: the revision the screen showed when the user acted.
+    base_revision: Any = None
+
+
 class ZoomApproveRequest(BaseModel):
     # What the reviewer actually saw: the output's fingerprint and the caption
     # revision / style revision drawn over it (or null for no captions).

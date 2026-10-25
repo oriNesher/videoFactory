@@ -1086,7 +1086,7 @@ STYLE_SPEC: dict[str, dict] = {
     "box_color": {"type": "colour", "default": "#000000", "label": "Box colour"},
     "box_opacity": {"type": "number", "default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05, "label": "Box opacity"},
     "vertical_position_percent": {
-        "type": "number", "default": 80.0, "min": 0.0, "max": 100.0, "step": 1.0,
+        "type": "number", "default": 60.0, "min": 0.0, "max": 100.0, "step": 1.0,
         "label": "Vertical position", "unit": "% (0 top, 100 bottom of the safe area)",
     },
     "safe_margin_percent": {

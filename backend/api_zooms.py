@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from . import broll, broll_planner_jobs, caption_inputs, caption_jobs, cutting, jobs, music, storage, zoom_jobs, zoom_planner, zooms
-from .models import ZoomApproveRequest, ZoomSettingsRequest, ZoomStartRequest
+from .models import ExternalPlanImportRequest, ZoomApproveRequest, ZoomSettingsRequest, ZoomStartRequest
 
 router = APIRouter(prefix="/projects/{project_id}/zooms", tags=["zooms"])
 
@@ -234,6 +234,18 @@ def start(project_id: str, request: ZoomStartRequest):
         },
     )
     return {"job": jobs.describe_job(record), "reused": None}
+
+
+@router.get("/inputs/{input_key}/external-prompt")
+def external_prompt(project_id: str, input_key: str):
+    """The exact instructions Gemini would get, to paste into another AI. Sends nothing."""
+    return _call(zoom_jobs.external_prompt, project_id, input_key)
+
+
+@router.post("/inputs/{input_key}/external-plan", status_code=201)
+def import_external_plan(project_id: str, input_key: str, request: ExternalPlanImportRequest):
+    """Use another AI's answer: validated like Gemini's, then rendered as a queued job."""
+    return _call(zoom_jobs.import_plan, project_id, input_key, request.answer)
 
 
 @router.get("/runs/{run_id}")
